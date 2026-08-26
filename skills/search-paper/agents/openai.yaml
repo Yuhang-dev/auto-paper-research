@@ -1,0 +1,4 @@
+interface:
+  display_name: "Search Papers"
+  short_description: "Build traceable candidate corpora for research reviews"
+  default_prompt: "Use $search-paper to plan and run a traceable literature search for this research question."

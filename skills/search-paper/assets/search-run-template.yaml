@@ -1,0 +1,72 @@
+schema_version: "0.1"
+
+run:
+  id: "<run-id>"
+  topic_slug: "<topic-slug>"
+  question: "<research-question>"
+  created_at: "<ISO-8601-timestamp>"
+  updated_at: "<ISO-8601-timestamp>"
+  status: "planned"
+  round: 1
+  provider:
+    name: "deepxiv"
+    interface: "deepxiv-sdk"
+    package_version: "<installed-version>"
+    source: "arxiv"
+  budget:
+    max_queries: 8
+    max_candidates: null
+    max_rounds: 3
+  stop_reason: null
+
+scope:
+  included_concepts: []
+  excluded_concepts: []
+  required_facets: []
+  years:
+    from: null
+    to: null
+  venues: []
+  categories: []
+  sources:
+    - "arxiv"
+  assumptions: []
+  unresolved_questions: []
+
+seeds: []
+queries: []
+candidates: []
+
+coverage:
+  facets: []
+  metrics:
+    executed_queries: 0
+    raw_retrieved_hits: 0
+    unique_candidates: 0
+    duplicate_rate: 0.0
+    relevance_counts:
+      core: 0
+      adjacent: 0
+      background: 0
+      exclude: 0
+      untriaged: 0
+    missing_metadata_count: 0
+    new_core_by_round: []
+  gaps: []
+
+citation_expansion:
+  performed: false
+  provider: null
+  records: []
+  gap_reason: null
+
+errors: []
+limitations:
+  - "Candidate screening is based on metadata or abstracts, not full-paper evidence."
+
+loop_review:
+  repeated_failure_keys: []
+  error_book_candidates: []
+  proposed_rules: []
+  proposed_scripts: []
+  skill_change_requested: false

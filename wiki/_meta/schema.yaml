@@ -1,0 +1,237 @@
+schema_version: "0.2"
+
+identity:
+  id_pattern: '^[a-z][a-z0-9_-]*:[a-z0-9][a-z0-9-]*$'
+  canonical_link_pattern: '^[a-z][a-z0-9_-]*:[a-z0-9][a-z0-9-]*$'
+
+lifecycle_statuses:
+  - candidate
+  - draft
+  - verified
+  - deprecated
+
+claim_assessments:
+  - open
+  - supported
+  - contested
+  - refuted
+
+nonconsensus_results:
+  - supported-consensus
+  - contested
+  - insufficient-evidence
+
+base:
+  required:
+    - schema_version
+    - id
+    - type
+    - title
+    - aliases
+    - status
+    - created_at
+    - updated_at
+    - relations
+  field_types:
+    schema_version: string
+    id: string
+    type: string
+    title: string
+    aliases: list
+    status: string
+    created_at: string
+    updated_at: string
+    relations: mapping
+    facets: list
+
+types:
+  paper:
+    directory: papers
+    required:
+      - authors
+      - year
+      - identifiers
+      - urls
+    field_types:
+      authors: list
+      year:
+        - integer
+        - "null"
+      identifiers: mapping
+      urls: mapping
+    verified_required:
+      - authors
+      - year
+    verified_any:
+      - - identifiers.arxiv
+        - identifiers.doi
+
+  method:
+    directory: methods
+    required:
+      - definition
+    field_types:
+      definition: string
+      sparsity:
+        - mapping
+        - "null"
+      implementations:
+        - list
+        - "null"
+    verified_required:
+      - definition
+
+  experiment:
+    directory: experiments
+    required:
+      - paper
+      - method
+      - model
+      - benchmark
+      - context_length
+      - sparsity
+      - metric
+      - result
+      - evidence
+    field_types:
+      paper: string
+      method:
+        - string
+        - list
+      model:
+        - string
+        - list
+      benchmark: string
+      context_length: integer
+      sparsity: mapping
+      metric: mapping
+      result: mapping
+      evidence: mapping
+    relation_fields:
+      paper:
+        relation: reports
+        direction: inbound
+      method:
+        relation: uses_method
+        direction: outbound
+      model:
+        relation: uses_model
+        direction: outbound
+      benchmark:
+        relation: evaluates_on
+        direction: outbound
+    verified_required:
+      - paper
+      - method
+      - model
+      - benchmark
+      - context_length
+      - metric.name
+      - result.value
+      - evidence.locator
+
+  claim:
+    directory: claims
+    required:
+      - statement
+      - assessment
+      - scope
+    field_types:
+      statement: string
+      assessment: string
+      scope: mapping
+    verified_required:
+      - statement
+      - assessment
+    verified_minimum_evidence_edges: 1
+
+  concept:
+    directory: concepts
+    required:
+      - definition
+    field_types:
+      definition: string
+    verified_required:
+      - definition
+
+  benchmark:
+    directory: benchmarks
+    required:
+      - task
+      - metrics
+      - source
+    field_types:
+      task: string
+      metrics: list
+      source: mapping
+    verified_required:
+      - task
+      - metrics
+    verified_any:
+      - - source.url
+        - source.paper
+
+  model:
+    directory: models
+    required:
+      - family
+      - parameters
+      - source
+    field_types:
+      family: string
+      parameters:
+        - string
+        - integer
+        - number
+        - "null"
+      source: mapping
+    verified_required:
+      - family
+      - parameters
+    verified_any:
+      - - source.url
+        - source.paper
+
+  assessment:
+    directory: assessments
+    required:
+      - question
+      - result
+      - claim_ids
+      - evidence_ids
+      - benchmark_ids
+      - rationale
+      - verified
+    field_types:
+      question: string
+      result: string
+      claim_ids: list
+      evidence_ids: list
+      method_family:
+        - string
+        - "null"
+      benchmark_ids: list
+      rationale: string
+      verified: boolean
+    relation_fields:
+      claim_ids:
+        relation: assesses_claim
+        direction: outbound
+      evidence_ids:
+        relation: uses_evidence
+        direction: outbound
+      benchmark_ids:
+        relation: assesses_on
+        direction: outbound
+    verified_required:
+      - question
+      - result
+      - claim_ids
+      - evidence_ids
+      - rationale
+      - verified
+
+compatibility:
+  missing_schema_version: warning
+  legacy_path_wikilink: warning
+  concept_kind_method: warning

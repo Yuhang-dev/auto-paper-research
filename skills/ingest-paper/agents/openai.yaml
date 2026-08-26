@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ingest Paper"
+  short_description: "Turn papers into evidence-grounded wiki pages"
+  default_prompt: "Use $ingest-paper to add this academic paper to the LLM research wiki."

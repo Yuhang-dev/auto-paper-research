@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+
+.env
+.env.*
+!.env.example
+
+# Rebuildable Wiki Engine artifacts
+wiki/_generated/
+error_book/_generated/
+
+# LangGraph checkpoints and research memory (always local on D:)
+.harness/
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm

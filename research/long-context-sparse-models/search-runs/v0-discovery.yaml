@@ -1,0 +1,407 @@
+schema_version: '0.1'
+run:
+  id: long-context-sparse-models-20260826T030500Z
+  topic_slug: long-context-sparse-models
+  question: 稀疏化模型在长上下文任务中的性能收益、工程瓶颈与失效条件是什么？
+  created_at: '2026-08-26T03:05:00Z'
+  updated_at: '2026-08-26T03:05:00Z'
+  status: planned
+  round: 1
+  provider:
+    name: deepxiv
+    interface: deepxiv-sdk
+    package_version: 1.0.0
+    source: arxiv
+  budget:
+    max_queries: 8
+    max_candidates: null
+    max_rounds: 3
+  stop_reason: null
+scope:
+  included_concepts:
+  - structural sparse attention for long-context language models
+  - static and dynamic sparse attention patterns
+  - long-context performance, efficiency, memory, and systems evidence
+  - failure analysis, reproductions, and strong baselines
+  excluded_concepts:
+  - generic weight pruning without long-context evidence
+  - generic MoE routing without long-context evidence
+  - pure retrieval or context compression presented as sparse architecture
+  - non-language domains without transferable systems evidence
+  required_facets:
+  - technical-taxonomy
+  - static-vs-dynamic
+  - prefill-vs-decode
+  - synthetic-vs-real-tasks
+  - quality-metrics
+  - latency-throughput
+  - memory-and-kv-cache
+  - kernels-and-hardware
+  - open-source-implementations
+  - limitations-and-counter-evidence
+  years:
+    from: 2018
+    to: 2026
+  venues: []
+  categories:
+  - cs.CL
+  - cs.LG
+  - cs.AI
+  sources:
+  - arxiv
+  assumptions:
+  - First-pass screening uses provider metadata and abstracts only.
+  - Attention-pattern sparsity is core; KV/token sparsity is tracked as a separate boundary family.
+  - Citation counts are metadata, not evidence strength.
+  unresolved_questions:
+  - Should recurrent memory and state-space models be retained only as dense alternatives or as a separate technical branch?
+  - Which KV/token sparsification methods should count as sparse models rather than inference-only compression?
+seeds:
+- candidate_id: arxiv:2309.12307
+  title: LongLoRA
+  role: known sparse-attention context-extension seed
+  local_wiki: wiki/papers/longlora.md
+queries:
+- id: Q01
+  round: 1
+  family: direct-topic
+  text: sparse attention long context large language models
+  purpose: Retrieve papers directly joining sparse attention and long-context LLMs.
+  target_facets:
+  - technical-taxonomy
+  - quality-metrics
+  derived_from: null
+  filters:
+    source: arxiv
+    categories: []
+    authors: []
+    orgs: []
+    venues: []
+    venue_year: null
+    min_citations: null
+    date_search_type: null
+    date_str: null
+    date_from: null
+    date_to: null
+    use_fine_rerank: false
+    size: 20
+    offset: 0
+  execution:
+    status: planned
+    executed_at: null
+    provider_total_count: null
+    retrieved_count: null
+    retained_count: null
+    raw_result_path: null
+    error_id: null
+- id: Q02
+  round: 1
+  family: terminology-and-architecture
+  text: block sparse sliding window global local attention long sequence transformer
+  purpose: Cover canonical static and structured sparse-attention terminology.
+  target_facets:
+  - technical-taxonomy
+  - static-vs-dynamic
+  derived_from: null
+  filters:
+    source: arxiv
+    categories: []
+    authors: []
+    orgs: []
+    venues: []
+    venue_year: null
+    min_citations: null
+    date_search_type: null
+    date_str: null
+    date_from: null
+    date_to: null
+    use_fine_rerank: false
+    size: 20
+    offset: 0
+  execution:
+    status: planned
+    executed_at: null
+    provider_total_count: null
+    retrieved_count: null
+    retained_count: null
+    raw_result_path: null
+    error_id: null
+- id: Q03
+  round: 1
+  family: dynamic-prefill
+  text: dynamic sparse attention long context prefill inference
+  purpose: Find input-dependent methods and evidence about prefill computation.
+  target_facets:
+  - static-vs-dynamic
+  - prefill-vs-decode
+  - latency-throughput
+  derived_from: null
+  filters:
+    source: arxiv
+    categories: []
+    authors: []
+    orgs: []
+    venues: []
+    venue_year: null
+    min_citations: null
+    date_search_type: null
+    date_str: null
+    date_from: null
+    date_to: null
+    use_fine_rerank: false
+    size: 20
+    offset: 0
+  execution:
+    status: planned
+    executed_at: null
+    provider_total_count: null
+    retrieved_count: null
+    retained_count: null
+    raw_result_path: null
+    error_id: null
+- id: Q04
+  round: 1
+  family: boundary-kv-token
+  text: KV cache sparsification token eviction long context decoding
+  purpose: Map the adjacent KV/token sparsity family without conflating it with attention-pattern sparsity.
+  target_facets:
+  - prefill-vs-decode
+  - memory-and-kv-cache
+  derived_from: null
+  filters:
+    source: arxiv
+    categories: []
+    authors: []
+    orgs: []
+    venues: []
+    venue_year: null
+    min_citations: null
+    date_search_type: null
+    date_str: null
+    date_from: null
+    date_to: null
+    use_fine_rerank: false
+    size: 20
+    offset: 0
+  execution:
+    status: planned
+    executed_at: null
+    provider_total_count: null
+    retrieved_count: null
+    retained_count: null
+    raw_result_path: null
+    error_id: null
+- id: Q05
+  round: 1
+  family: tasks-and-benchmarks
+  text: long document question answering sparse attention LongBench RULER
+  purpose: Retrieve real long-document and benchmark evidence beyond synthetic retrieval.
+  target_facets:
+  - synthetic-vs-real-tasks
+  - quality-metrics
+  derived_from: null
+  filters:
+    source: arxiv
+    categories: []
+    authors: []
+    orgs: []
+    venues: []
+    venue_year: null
+    min_citations: null
+    date_search_type: null
+    date_str: null
+    date_from: null
+    date_to: null
+    use_fine_rerank: false
+    size: 20
+    offset: 0
+  execution:
+    status: planned
+    executed_at: null
+    provider_total_count: null
+    retrieved_count: null
+    retained_count: null
+    raw_result_path: null
+    error_id: null
+- id: Q06
+  round: 1
+  family: systems-and-kernels
+  text: sparse long context attention latency memory throughput CUDA Triton kernel
+  purpose: Find wall-clock, memory, kernel, and hardware-utilization evidence.
+  target_facets:
+  - latency-throughput
+  - memory-and-kv-cache
+  - kernels-and-hardware
+  derived_from: null
+  filters:
+    source: arxiv
+    categories: []
+    authors: []
+    orgs: []
+    venues: []
+    venue_year: null
+    min_citations: null
+    date_search_type: null
+    date_str: null
+    date_from: null
+    date_to: null
+    use_fine_rerank: false
+    size: 20
+    offset: 0
+  execution:
+    status: planned
+    executed_at: null
+    provider_total_count: null
+    retrieved_count: null
+    retained_count: null
+    raw_result_path: null
+    error_id: null
+- id: Q07
+  round: 1
+  family: limitations-and-counter-evidence
+  text: sparse attention long context limitations failure dense baseline lost in the middle
+  purpose: Deliberately retrieve failures, strong dense baselines, and conflicting conclusions.
+  target_facets:
+  - limitations-and-counter-evidence
+  - synthetic-vs-real-tasks
+  derived_from: null
+  filters:
+    source: arxiv
+    categories: []
+    authors: []
+    orgs: []
+    venues: []
+    venue_year: null
+    min_citations: null
+    date_search_type: null
+    date_str: null
+    date_from: null
+    date_to: null
+    use_fine_rerank: false
+    size: 20
+    offset: 0
+  execution:
+    status: planned
+    executed_at: null
+    provider_total_count: null
+    retrieved_count: null
+    retained_count: null
+    raw_result_path: null
+    error_id: null
+- id: Q08
+  round: 1
+  family: open-source-implementation
+  text: long context sparse attention open source implementation GitHub
+  purpose: Discover candidate implementations for later repository verification.
+  target_facets:
+  - open-source-implementations
+  - kernels-and-hardware
+  derived_from: null
+  filters:
+    source: arxiv
+    categories: []
+    authors: []
+    orgs: []
+    venues: []
+    venue_year: null
+    min_citations: null
+    date_search_type: null
+    date_str: null
+    date_from: null
+    date_to: null
+    use_fine_rerank: false
+    size: 20
+    offset: 0
+  execution:
+    status: planned
+    executed_at: null
+    provider_total_count: null
+    retrieved_count: null
+    retained_count: null
+    raw_result_path: null
+    error_id: null
+candidates: []
+coverage:
+  facets:
+  - name: technical-taxonomy
+    status: missing
+    candidate_ids: []
+    note: Awaiting first-pass retrieval.
+    next_query: Q01/Q02
+  - name: static-vs-dynamic
+    status: missing
+    candidate_ids: []
+    note: Awaiting first-pass retrieval.
+    next_query: Q02/Q03
+  - name: prefill-vs-decode
+    status: missing
+    candidate_ids: []
+    note: Awaiting first-pass retrieval.
+    next_query: Q03/Q04
+  - name: synthetic-vs-real-tasks
+    status: missing
+    candidate_ids: []
+    note: Awaiting first-pass retrieval.
+    next_query: Q05/Q07
+  - name: quality-metrics
+    status: missing
+    candidate_ids: []
+    note: Awaiting first-pass retrieval.
+    next_query: Q01/Q05
+  - name: latency-throughput
+    status: missing
+    candidate_ids: []
+    note: Awaiting first-pass retrieval.
+    next_query: Q03/Q06
+  - name: memory-and-kv-cache
+    status: missing
+    candidate_ids: []
+    note: Awaiting first-pass retrieval.
+    next_query: Q04/Q06
+  - name: kernels-and-hardware
+    status: missing
+    candidate_ids: []
+    note: Awaiting first-pass retrieval.
+    next_query: Q06/Q08
+  - name: open-source-implementations
+    status: missing
+    candidate_ids: []
+    note: Repository ownership and reproducibility require later verification.
+    next_query: Q08
+  - name: limitations-and-counter-evidence
+    status: missing
+    candidate_ids: []
+    note: Awaiting the deliberately disconfirming query family.
+    next_query: Q07
+  metrics:
+    executed_queries: 0
+    raw_retrieved_hits: 0
+    unique_candidates: 0
+    duplicate_rate: 0.0
+    relevance_counts:
+      core: 0
+      adjacent: 0
+      background: 0
+      exclude: 0
+      untriaged: 0
+    missing_metadata_count: 0
+    new_core_by_round: []
+  gaps:
+  - Forward and backward citation expansion is not configured in V0.
+  - Open-source repositories require a separate ownership and reproducibility check.
+citation_expansion:
+  performed: false
+  provider: null
+  records: []
+  gap_reason: No citation-graph provider is configured for V0.
+errors: []
+limitations:
+- Candidate screening is based on metadata or abstracts, not full-paper evidence.
+- First-pass discovery uses DeepXiv arXiv retrieval and is not exhaustive.
+- Citation expansion and repository verification remain separate gaps.
+loop_review:
+  repeated_failure_keys: []
+  error_book_candidates: []
+  proposed_rules: []
+  proposed_scripts: []
+  skill_change_requested: false

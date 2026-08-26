@@ -1,0 +1,50 @@
+schema_version: "0.2"
+status: draft
+
+# Provisional Harness gates, not scientific claims. Candidate coverage is useful
+# for routing, but only evidence_facet_coverage can satisfy these requirements.
+facet_requirements:
+  technical-taxonomy: covered
+  static-vs-dynamic: covered
+  prefill-vs-decode: covered
+  synthetic-vs-real-tasks: covered
+  quality-metrics: covered
+  latency-throughput: covered
+  memory-and-kv-cache: covered
+  kernels-and-hardware: partial
+  open-source-implementations: partial
+  limitations-and-counter-evidence: covered
+
+minimum_method_families: 5
+minimum_core_candidates: 40
+minimum_ingested_papers: 20
+minimum_verified_papers: 10
+minimum_experiments: 50
+minimum_verified_claims: 30
+minimum_evidence_locator_ratio: 0.90
+maximum_schema_errors: 0
+
+require_nonconsensus_review: true
+minimum_verified_nonconsensus_assessments: 3
+
+context_bucket_requirements:
+  8K-32K: 3
+  32K-64K: 3
+  ">=64K": 3
+
+engineering_metric_requirements:
+  latency: 3
+  memory: 3
+
+require_no_open_blocking_gaps: true
+
+# novelty_yield is still a raw new-core-paper count, not a normalized score.
+minimum_completed_search_rounds: 2
+saturation_window: 2
+saturation_novelty_threshold: 0.0
+
+max_research_iterations: 30
+max_search_runs: 20
+max_ingested_papers: 100
+max_tool_calls: 500
+max_no_progress_rounds: 3

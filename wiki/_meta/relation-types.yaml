@@ -1,0 +1,79 @@
+schema_version: "0.2"
+
+relations:
+  proposes:
+    source_types:
+      - paper
+    target_types:
+      - method
+    inverse: proposed_by
+
+  reports:
+    source_types:
+      - paper
+    target_types:
+      - experiment
+    inverse: reported_by
+
+  uses_method:
+    source_types:
+      - experiment
+    target_types:
+      - method
+    inverse: used_by_experiment
+
+  uses_model:
+    source_types:
+      - experiment
+    target_types:
+      - model
+    inverse: used_by_experiment
+
+  evaluates_on:
+    source_types:
+      - experiment
+    target_types:
+      - benchmark
+    inverse: evaluated_by
+
+  supports:
+    source_types:
+      - experiment
+    target_types:
+      - claim
+    inverse: supported_by
+
+  contradicts:
+    source_types:
+      - experiment
+    target_types:
+      - claim
+    inverse: contradicted_by
+
+  instance_of:
+    source_types:
+      - method
+    target_types:
+      - concept
+    inverse: has_instance
+
+  assesses_claim:
+    source_types:
+      - assessment
+    target_types:
+      - claim
+    inverse: assessed_by
+
+  uses_evidence:
+    source_types:
+      - assessment
+    target_types:
+      - experiment
+    inverse: used_by_assessment
+
+  assesses_on:
+    source_types:
+      - assessment
+    target_types:
+      - benchmark
+    inverse: assessed_by
