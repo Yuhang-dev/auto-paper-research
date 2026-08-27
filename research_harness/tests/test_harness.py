@@ -35,6 +35,7 @@ from research_harness.research_evaluation import (
 )
 from research_harness.research_execution import DeterministicActionExecutor
 from research_harness.research_models import (
+    ActionAttemptStats,
     DoneCriteria,
     NonConsensusAssessment,
     ResearchActionResult,
@@ -134,7 +135,10 @@ class ConfigurationAndPersistenceTests(HarnessTestCase):
 class SkillRegistryTests(HarnessTestCase):
     def test_registry_discovers_and_parses_repository_skills(self) -> None:
         registry = SkillRegistry(self.settings.skills_root)
-        self.assertEqual(("ingest-paper", "search-paper"), registry.names)
+        self.assertEqual(
+            ("analyze-claims", "ingest-paper", "search-paper", "verify-evidence"),
+            registry.names,
+        )
 
         search = registry.get("search-paper")
         self.assertTrue(search.instructions.startswith("# Search Paper"))
@@ -188,7 +192,10 @@ class SkillRegistryTests(HarnessTestCase):
             self.settings,
             model=ScriptedModel([AIMessage(content="unused")]),
         )
-        self.assertEqual(("ingest-paper", "search-paper"), harness.skill_registry.names)
+        self.assertEqual(
+            ("analyze-claims", "ingest-paper", "search-paper", "verify-evidence"),
+            harness.skill_registry.names,
+        )
         self.assertFalse(hasattr(harness, "skill_router"))
 
 
@@ -519,6 +526,89 @@ class ResearchEvaluationTests(HarnessTestCase):
         self.assertEqual(1.0, progress.novelty_yield)
         self.assertEqual(0, progress.no_progress_rounds)
 
+        queued = snapshot.model_copy(
+            update={
+                "corpus": snapshot.corpus.model_copy(update={"selected_for_ingest": 1})
+            }
+        )
+        dequeued = snapshot.model_copy(update={"snapshot_id": "queue-drained"})
+        queue_progress = measure_progress(
+            queued,
+            dequeued,
+            action_attempted=True,
+        )
+        self.assertTrue(queue_progress.made_progress)
+        self.assertEqual(0.5, queue_progress.novelty_yield)
+        self.assertIn("search-runs", queue_progress.changed_sources)
+
+    def test_action_frontier_skips_unsupported_and_stalls_per_pair(self) -> None:
+        snapshot = inspect_research(self.settings, "long-context-sparse-models")
+        criteria = load_done_criteria(self.settings, "long-context-sparse-models")
+        ingest_gap = ResearchGap(
+            id="gap-ingest",
+            key="ingest",
+            type="workflow_gap",
+            question="Ingest a selected paper?",
+            priority=0.99,
+            reasons=("candidate ready",),
+            recommended_action="ingest",
+        )
+        search_gap = ResearchGap(
+            id="gap-search",
+            key="search",
+            type="coverage_gap",
+            question="Search another facet?",
+            priority=0.8,
+            reasons=("facet missing",),
+            recommended_action="search",
+        )
+        gaps = (ingest_gap, search_gap)
+        evaluation = check_done(
+            snapshot,
+            criteria,
+            gaps,
+            research_iteration=0,
+            no_progress_rounds=criteria.max_no_progress_rounds,
+            supported_actions=frozenset({"search"}),
+        )
+        self.assertIsNone(evaluation.stop_reason)
+        decision = decide_next_action(
+            gaps,
+            evaluation,
+            supported_actions=frozenset({"search"}),
+        )
+        self.assertEqual("search", decision.action)
+        self.assertEqual(search_gap.id, decision.target_gap_id)
+
+        attempt_key = f"{search_gap.id}:search"
+        attempts = {
+            attempt_key: ActionAttemptStats(
+                attempt_key=attempt_key,
+                target_gap_id=search_gap.id,
+                action="search",
+                attempts=criteria.max_no_progress_rounds,
+                no_progress=criteria.max_no_progress_rounds,
+            ).model_dump(mode="json")
+        }
+        stalled = check_done(
+            snapshot,
+            criteria,
+            gaps,
+            research_iteration=0,
+            attempts_by_gap_action=attempts,
+            supported_actions=frozenset({"search"}),
+        )
+        self.assertEqual("stalled", stalled.stop_reason)
+
+        blocked = check_done(
+            snapshot,
+            criteria,
+            (ingest_gap,),
+            research_iteration=0,
+            supported_actions=frozenset({"search"}),
+        )
+        self.assertEqual("blocked", blocked.stop_reason)
+
     def test_research_control_pass_is_checkpointed_without_a_model(self) -> None:
         with ResearchController(
             self.settings,
@@ -622,6 +712,7 @@ class ResearchEvaluationTests(HarnessTestCase):
 
         class Executor:
             calls = 0
+            supported_actions = frozenset({"search"})
 
             def execute(self, *, decision, gap, snapshot, action_id, allow_network):
                 del gap, snapshot, allow_network
@@ -666,7 +757,7 @@ class ResearchEvaluationTests(HarnessTestCase):
         self.assertEqual(1, state["research_iterations"])
         self.assertEqual(2, state["tool_calls"])
         self.assertTrue(state["progress"]["made_progress"])
-        self.assertEqual(2.0, state["progress"]["novelty_yield"])
+        self.assertEqual(2.0, state["progress"]["progress_score"])
         self.assertEqual(1, state["attempts_by_gap_action"][attempt_key]["attempts"])
         self.assertEqual(0, state["attempts_by_gap_action"][attempt_key]["no_progress"])
         self.assertEqual(2, len(state["action_history"]))
@@ -950,7 +1041,7 @@ class HarnessCliTests(HarnessTestCase):
             )
         listed = json.loads(list_output.getvalue())
         self.assertEqual(0, list_exit)
-        self.assertEqual(2, listed["count"])
+        self.assertEqual(4, listed["count"])
 
         show_output = io.StringIO()
         with redirect_stdout(show_output):

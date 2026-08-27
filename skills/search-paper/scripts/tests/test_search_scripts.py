@@ -326,9 +326,64 @@ class ValidatorTests(unittest.TestCase):
         run["run"]["provider"]["token"] = "example-secret"
         issues, _ = validate_run(run)
         self.assertTrue(
-            any(issue.path.endswith(".token") and issue.severity == "error" for issue in issues)
+            any(
+                issue.path.endswith(".token") and issue.severity == "error"
+                for issue in issues
+            )
         )
         self.assertFalse(any("example-secret" in issue.message for issue in issues))
+
+    def test_local_pdf_handoff_requires_safe_relative_pdf_path(self) -> None:
+        valid = self._valid_run()
+        valid["candidates"][0]["local_pdf_path"] = "sources/papers/example.pdf"
+        issues, _ = validate_run(valid)
+        self.assertFalse(
+            [
+                issue
+                for issue in issues
+                if issue.path.endswith(".local_pdf_path") and issue.severity == "error"
+            ]
+        )
+
+        unsafe = self._valid_run()
+        unsafe["candidates"][0]["local_pdf_path"] = "../outside.pdf"
+        issues, _ = validate_run(unsafe)
+        self.assertTrue(
+            any(
+                issue.path.endswith(".local_pdf_path") and issue.severity == "error"
+                for issue in issues
+            )
+        )
+
+    def test_ingested_candidate_requires_closed_handoff_record(self) -> None:
+        run = self._valid_run()
+        candidate = run["candidates"][0]
+        candidate["review_state"] = "ingested"
+        candidate["local_pdf_path"] = "sources/papers/example.pdf"
+        candidate["ingest"] = {
+            "paper_id": "paper:example",
+            "status": "published",
+            "ingested_at": "2026-08-27T12:00:00+00:00",
+            "wiki_paths": ["wiki/papers/example.md"],
+            "diagnostic_codes": [],
+        }
+        issues, _ = validate_run(run)
+        self.assertFalse(
+            [
+                issue
+                for issue in issues
+                if ".ingest" in issue.path and issue.severity == "error"
+            ]
+        )
+
+        candidate["ingest"]["paper_id"] = "not-canonical"
+        issues, _ = validate_run(run)
+        self.assertTrue(
+            any(
+                issue.path.endswith(".ingest.paper_id") and issue.severity == "error"
+                for issue in issues
+            )
+        )
 
 
 if __name__ == "__main__":

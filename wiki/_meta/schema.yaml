@@ -7,6 +7,7 @@ identity:
 lifecycle_statuses:
   - candidate
   - draft
+  - needs-review
   - verified
   - deprecated
 
@@ -43,6 +44,8 @@ base:
     updated_at: string
     relations: mapping
     facets: list
+    verification: mapping
+    analysis: mapping
 
 types:
   paper:
@@ -56,6 +59,9 @@ types:
       authors: list
       year:
         - integer
+        - "null"
+      venue:
+        - string
         - "null"
       identifiers: mapping
       urls: mapping

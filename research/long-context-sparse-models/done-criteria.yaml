@@ -38,7 +38,7 @@ engineering_metric_requirements:
 
 require_no_open_blocking_gaps: true
 
-# novelty_yield is still a raw new-core-paper count, not a normalized score.
+# Search saturation reads SearchYield.new_core_papers, not the weighted research progress_score.
 minimum_completed_search_rounds: 2
 saturation_window: 2
 saturation_novelty_threshold: 0.0

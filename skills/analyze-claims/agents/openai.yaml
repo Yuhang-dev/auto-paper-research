@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Claims"
+  short_description: "Compare verified claims for consensus and conflict"
+  default_prompt: "Use $analyze-claims to assess consensus, conflict, or insufficient evidence."

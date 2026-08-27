@@ -9,7 +9,13 @@ from typing import Any, Dict, List, Optional, Sequence, Type
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.messages.utils import count_tokens_approximately, trim_messages
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
@@ -67,7 +73,9 @@ def build_graph(
     persistence: HarnessPersistence,
 ):
     if persistence.checkpointer is None or persistence.store is None:
-        raise RuntimeError("Harness persistence must be open before compiling the graph")
+        raise RuntimeError(
+            "Harness persistence must be open before compiling the graph"
+        )
     model_with_tools = model.bind_tools(list(tools))
 
     def prepare_turn(state: HarnessState) -> Dict[str, Any]:
@@ -182,7 +190,7 @@ def load_chat_model(settings: HarnessSettings) -> BaseChatModel:
     if not settings.model:
         raise ValueError(
             "No model configured. Set HARNESS_MODEL or pass --model, for example "
-            "openai:gpt-4.1-mini."
+            "openai:deepseek-v4-flash."
         )
     return init_chat_model(settings.model)
 

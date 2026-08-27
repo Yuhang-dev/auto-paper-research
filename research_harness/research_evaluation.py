@@ -7,7 +7,18 @@ import json
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    AbstractSet,
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import yaml  # type: ignore[import-untyped]
 
@@ -25,10 +36,12 @@ from .research_models import (
     NonConsensusAssessment,
     ProgressMeasurement,
     QualitySnapshot,
+    ResearchAction,
     ResearchDecision,
     ResearchGap,
     ResearchSnapshot,
     SearchYield,
+    StopReason,
     TaxonomySnapshot,
 )
 
@@ -331,7 +344,6 @@ def inspect_research(
                         run_id=run_id,
                         round=round_number,
                         new_core_papers=count,
-                        novelty_yield=float(count),
                     )
                 )
         elif executed_queries:
@@ -340,7 +352,6 @@ def inspect_research(
                     run_id=run_id,
                     round=max(int(header.get("round") or 1), 1),
                     new_core_papers=0,
-                    novelty_yield=0.0,
                 )
             )
 
@@ -440,7 +451,7 @@ def inspect_research(
         for facet in _entity_facets(entity):
             if status == "verified":
                 evidence_facet_verified_ids[facet].add(entity.entity_id)
-            elif status == "draft":
+            elif status in {"draft", "needs-review"}:
                 evidence_facet_draft_ids[facet].add(entity.entity_id)
 
     model_families: Counter[str] = Counter()
@@ -720,7 +731,10 @@ def evaluate_gaps(
                     f"Unclassified method entities: {snapshot.taxonomy.unclassified_methods}.",
                 ),
                 recommended_action=(
-                    "ingest" if snapshot.corpus.selected_for_ingest else "search"
+                    "ingest"
+                    if snapshot.corpus.selected_for_ingest
+                    or snapshot.corpus.core_candidates > snapshot.corpus.ingested_papers
+                    else "search"
                 ),
                 evidence={
                     "known_families": tuple(snapshot.taxonomy.method_families),
@@ -739,7 +753,10 @@ def evaluate_gaps(
                     f"Ingested papers: {snapshot.corpus.ingested_papers}; required: {criteria.minimum_ingested_papers}.",
                 ),
                 recommended_action=(
-                    "ingest" if snapshot.corpus.selected_for_ingest else "search"
+                    "ingest"
+                    if snapshot.corpus.selected_for_ingest
+                    or snapshot.corpus.core_candidates > snapshot.corpus.ingested_papers
+                    else "search"
                 ),
             )
         )
@@ -798,10 +815,19 @@ def evaluate_gaps(
                 priority=0.86,
                 reasons=(
                     f"Verified non-consensus assessments: {snapshot.evidence.verified_nonconsensus_assessments}; required: {criteria.minimum_verified_nonconsensus_assessments}.",
+                    f"Draft or unverified assessments: {snapshot.evidence.nonconsensus_assessments - snapshot.evidence.verified_nonconsensus_assessments}.",
                     "A supported consensus, contested result, or insufficient-evidence result is valid when evidence-grounded.",
                 ),
                 recommended_action=(
-                    "analyze_claims" if snapshot.evidence.claims_total else "ingest"
+                    "verify"
+                    if snapshot.evidence.nonconsensus_assessments
+                    > snapshot.evidence.verified_nonconsensus_assessments
+                    else (
+                        "analyze_claims"
+                        if snapshot.evidence.verified_claims
+                        and snapshot.evidence.verified_experiments
+                        else "verify"
+                    )
                 ),
                 search_focus=(
                     "limitations",
@@ -917,8 +943,14 @@ def check_done(
     research_iteration: int,
     tool_calls: int = 0,
     no_progress_rounds: int = 0,
+    attempts_by_gap_action: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    supported_actions: Optional[AbstractSet[ResearchAction]] = None,
 ) -> DoneCheck:
     """Apply hard coverage, quality, saturation, and budget gates."""
+
+    # Retained for CLI/checkpoint compatibility. Global stopping is intentionally
+    # based on the action frontier below, not the last attempted pair's counter.
+    del no_progress_rounds
 
     coverage_failures = []
     for facet, required_status in criteria.facet_requirements.items():
@@ -1009,7 +1041,7 @@ def check_done(
     else:
         window = yields[-criteria.saturation_window :]
         if all(
-            item.novelty_yield <= criteria.saturation_novelty_threshold
+            item.new_core_papers <= criteria.saturation_novelty_threshold
             for item in window
         ):
             saturation_passed = True
@@ -1057,14 +1089,11 @@ def check_done(
             "done criteria status is draft; automatic completion is disabled"
         )
 
-    stop_reason = None
+    stop_reason: Optional[StopReason] = None
     if complete:
         stop_reason = "completed"
     elif budget_exhausted:
         stop_reason = "budget_exhausted"
-    elif no_progress_rounds >= criteria.max_no_progress_rounds:
-        stop_reason = "human_review_required"
-        failures.append(f"no progress for {no_progress_rounds} attempted action rounds")
     elif (
         snapshot.corpus.query_count > 0
         and snapshot.corpus.blocked_queries == snapshot.corpus.query_count
@@ -1072,6 +1101,41 @@ def check_done(
     ):
         stop_reason = "blocked"
         failures.append("all known search queries are blocked")
+    elif supported_actions is not None:
+        open_gaps = tuple(gap for gap in gaps if gap.status == "open")
+        attempts = attempts_by_gap_action or {}
+        supported_pairs = []
+        eligible_pairs = []
+        exhausted_pairs = []
+        unsupported_pairs = []
+        for gap in open_gaps:
+            attempt_key = f"{gap.id}:{gap.recommended_action}"
+            if gap.recommended_action not in supported_actions:
+                unsupported_pairs.append(attempt_key)
+                continue
+            supported_pairs.append(attempt_key)
+            raw_stats = attempts.get(attempt_key)
+            if raw_stats is None:
+                eligible_pairs.append(attempt_key)
+                continue
+            stats = ActionAttemptStats.model_validate(raw_stats)
+            if stats.no_progress >= criteria.max_no_progress_rounds:
+                exhausted_pairs.append(attempt_key)
+            else:
+                eligible_pairs.append(attempt_key)
+        if open_gaps and not eligible_pairs:
+            if supported_pairs:
+                stop_reason = "stalled"
+                failures.append(
+                    "all supported open gap/action pairs are exhausted: "
+                    + ", ".join(exhausted_pairs)
+                )
+            else:
+                stop_reason = "blocked"
+                failures.append(
+                    "no open gap has an available executor: "
+                    + ", ".join(unsupported_pairs)
+                )
 
     return DoneCheck(
         complete=complete,
@@ -1102,7 +1166,7 @@ def measure_progress(
             action_attempted=action_attempted,
             changed=False,
             deltas={},
-            novelty_yield=0.0,
+            progress_score=0.0,
             made_progress=False,
             no_progress_rounds=previous_no_progress_rounds,
             changed_sources=(),
@@ -1111,6 +1175,7 @@ def measure_progress(
     before_metrics = {
         "unique_candidates": before.corpus.unique_candidates,
         "core_candidates": before.corpus.core_candidates,
+        "selected_for_ingest": before.corpus.selected_for_ingest,
         "ingested_papers": before.corpus.ingested_papers,
         "verified_papers": before.corpus.verified_papers,
         "method_families": len(before.taxonomy.method_families),
@@ -1121,6 +1186,7 @@ def measure_progress(
         "experiments": before.evidence.experiments_total,
         "verified_claims": before.evidence.verified_claims,
         "contested_claims": before.evidence.contested_claims,
+        "nonconsensus_assessments": before.evidence.nonconsensus_assessments,
         "verified_nonconsensus_assessments": before.evidence.verified_nonconsensus_assessments,
         "evidence_locators": before.evidence.experiments_with_evidence_locator,
         "benchmarks": before.evidence.benchmarks_total,
@@ -1128,6 +1194,7 @@ def measure_progress(
     after_metrics = {
         "unique_candidates": after.corpus.unique_candidates,
         "core_candidates": after.corpus.core_candidates,
+        "selected_for_ingest": after.corpus.selected_for_ingest,
         "ingested_papers": after.corpus.ingested_papers,
         "verified_papers": after.corpus.verified_papers,
         "method_families": len(after.taxonomy.method_families),
@@ -1138,6 +1205,7 @@ def measure_progress(
         "experiments": after.evidence.experiments_total,
         "verified_claims": after.evidence.verified_claims,
         "contested_claims": after.evidence.contested_claims,
+        "nonconsensus_assessments": after.evidence.nonconsensus_assessments,
         "verified_nonconsensus_assessments": after.evidence.verified_nonconsensus_assessments,
         "evidence_locators": after.evidence.experiments_with_evidence_locator,
         "benchmarks": after.evidence.benchmarks_total,
@@ -1148,6 +1216,7 @@ def measure_progress(
     weights = {
         "unique_candidates": 0.5,
         "core_candidates": 1.0,
+        "selected_for_ingest": 0.5,
         "ingested_papers": 1.0,
         "verified_papers": 2.0,
         "method_families": 3.0,
@@ -1155,14 +1224,16 @@ def measure_progress(
         "experiments": 1.0,
         "verified_claims": 2.0,
         "contested_claims": 3.0,
+        "nonconsensus_assessments": 1.5,
         "verified_nonconsensus_assessments": 3.0,
         "evidence_locators": 1.0,
         "benchmarks": 1.0,
     }
-    novelty_yield = sum(
+    progress_score = sum(
         max(deltas[name], 0) * weight for name, weight in weights.items()
     )
-    made_progress = novelty_yield > 0
+    progress_score += max(-deltas["selected_for_ingest"], 0) * 0.5
+    made_progress = progress_score > 0
     if action_attempted:
         no_progress_rounds = 0 if made_progress else previous_no_progress_rounds + 1
     else:
@@ -1174,6 +1245,7 @@ def measure_progress(
         before.corpus.search_run_paths != after.corpus.search_run_paths
         or before.corpus.query_statuses != after.corpus.query_statuses
         or before.corpus.unique_candidates != after.corpus.unique_candidates
+        or before.corpus.selected_for_ingest != after.corpus.selected_for_ingest
         or before.corpus.search_yields != after.corpus.search_yields
     ):
         changed_sources.append("search-runs")
@@ -1182,7 +1254,7 @@ def measure_progress(
         action_attempted=action_attempted,
         changed=before.snapshot_id != after.snapshot_id,
         deltas=deltas,
-        novelty_yield=float(novelty_yield),
+        progress_score=float(progress_score),
         made_progress=made_progress,
         no_progress_rounds=no_progress_rounds,
         changed_sources=tuple(changed_sources),
@@ -1195,6 +1267,7 @@ def decide_next_action(
     *,
     attempts_by_gap_action: Optional[Mapping[str, Mapping[str, Any]]] = None,
     max_no_progress_per_gap_action: Optional[int] = None,
+    supported_actions: Optional[AbstractSet[ResearchAction]] = None,
 ) -> ResearchDecision:
     """Choose from a finite action set while avoiding exhausted gap/action pairs."""
 
@@ -1226,8 +1299,15 @@ def decide_next_action(
     attempts = attempts_by_gap_action or {}
     eligible_gaps = []
     exhausted = []
+    unsupported = []
     for gap in open_gaps:
         attempt_key = f"{gap.id}:{gap.recommended_action}"
+        if (
+            supported_actions is not None
+            and gap.recommended_action not in supported_actions
+        ):
+            unsupported.append(attempt_key)
+            continue
         raw_stats = attempts.get(attempt_key)
         if raw_stats is None or max_no_progress_per_gap_action is None:
             eligible_gaps.append(gap)
@@ -1238,11 +1318,16 @@ def decide_next_action(
         else:
             eligible_gaps.append(gap)
     if not eligible_gaps:
+        details = []
+        if exhausted:
+            details.append("exhausted=" + ", ".join(exhausted))
+        if unsupported:
+            details.append("unsupported=" + ", ".join(unsupported))
         return ResearchDecision(
             action="synthesize",
             reason=(
-                "All open gap/action pairs reached the no-progress limit: "
-                + ", ".join(exhausted)
+                "No executable open gap/action pair remains"
+                + (": " + "; ".join(details) if details else ".")
             ),
             expected_information_gain=0.05,
         )

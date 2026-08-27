@@ -105,6 +105,17 @@ Required candidate fields:
 Metadata may include authors, date, year, venue, abstract, TLDR, categories,
 citation count, retrieval score, paper URL, PDF URL, DOI, and repository URL.
 
+After a reviewer selects a candidate and places its source PDF in the repository,
+`local_pdf_path` may bind it to a repository-relative `.pdf` path. This field is a
+handoff to `ingest-paper`; providers must not populate it and search execution must
+not download a file implicitly.
+
+After structured screening selects an arXiv candidate, the explicit `ingest` action
+may acquire its public PDF when the run has network authorization. The Harness then
+adds `local_pdf_path` and a `source_acquisition` mapping containing source URL,
+SHA-256, byte size, timestamp, and whether a download occurred. This acquisition is
+part of ingest, not provider search.
+
 Do not derive venue, citations, or repository ownership. A paper and PDF URL
 may be deterministically derived from an arXiv ID.
 
@@ -144,8 +155,14 @@ Allowed review states:
 - `metadata-only`;
 - `abstract-screened`;
 - `selected-for-ingest`;
+- `ingested`;
 - `excluded`;
 - `needs-review`.
+
+After successful Wiki publication, the Harness changes `selected-for-ingest` to
+`ingested` and records canonical `paper_id`, timestamp, changed Wiki paths, and
+diagnostics under the candidate's `ingest` mapping. This prevents the Outer Loop
+from repeatedly selecting the same handoff.
 
 An excluded candidate requires `exclusion_reason`.
 

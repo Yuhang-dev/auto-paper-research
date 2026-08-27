@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable, Dict, Optional, Protocol, Type, Union
+from typing import AbstractSet, Any, Callable, Dict, Optional, Protocol, Type, Union
 
 from langgraph.graph import END, START, StateGraph
 
@@ -26,6 +26,7 @@ from .research_models import (
     DoneCheck,
     DoneCriteria,
     ProgressMeasurement,
+    ResearchAction,
     ResearchActionResult,
     ResearchDecision,
     ResearchGap,
@@ -36,11 +37,14 @@ from .state import ResearchState
 
 THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 CHECKPOINT_NAMESPACE = "research-control-v0.2"
-AUTONOMOUS_CHECKPOINT_NAMESPACE = "research-loop-v1.1"
+AUTONOMOUS_CHECKPOINT_NAMESPACE = "research-loop-v1.2"
 ResearchInspector = Callable[[HarnessSettings, str], ResearchSnapshot]
 
 
 class ResearchActionExecutor(Protocol):
+    @property
+    def supported_actions(self) -> AbstractSet[ResearchAction]: ...
+
     def execute(
         self,
         *,
@@ -246,6 +250,7 @@ def build_autonomous_research_graph(
         raise RuntimeError(
             "Harness persistence must be open before compiling the graph"
         )
+    supported_actions = frozenset(action_executor.supported_actions)
 
     def bootstrap(state: ResearchState) -> Dict[str, Any]:
         return {
@@ -358,6 +363,8 @@ def build_autonomous_research_graph(
             research_iteration=int(state.get("research_iterations") or 0),
             tool_calls=int(state.get("tool_calls") or 0),
             no_progress_rounds=int(state.get("no_progress_rounds") or 0),
+            attempts_by_gap_action=state.get("attempts_by_gap_action"),
+            supported_actions=supported_actions,
         )
         return {
             "phase": "checked",
@@ -375,6 +382,7 @@ def build_autonomous_research_graph(
             DoneCheck.model_validate(state["evaluation"]),
             attempts_by_gap_action=state.get("attempts_by_gap_action"),
             max_no_progress_per_gap_action=criteria.max_no_progress_rounds,
+            supported_actions=supported_actions,
         )
         return {"phase": "execute", **_record_decision(state, decision)}
 
@@ -393,8 +401,11 @@ def build_autonomous_research_graph(
                 allow_network=bool(state.get("allow_network")),
             )
         except Exception as exc:
-            token = os.getenv("DEEPXIV_TOKEN", "")
-            message = str(exc).replace(token, "[REDACTED]") if token else str(exc)
+            message = str(exc)
+            for name in ("DEEPXIV_TOKEN", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
+                secret = os.getenv(name, "")
+                if secret:
+                    message = message.replace(secret, "[REDACTED]")
             result = ResearchActionResult(
                 action_id=action_id,
                 action=decision.action,
@@ -437,6 +448,7 @@ def build_autonomous_research_graph(
             DoneCheck.model_validate(state["evaluation"]),
             attempts_by_gap_action=state.get("attempts_by_gap_action"),
             max_no_progress_per_gap_action=criteria.max_no_progress_rounds,
+            supported_actions=supported_actions,
         )
         return {"phase": "stopped", **_record_decision(state, decision)}
 

@@ -13,9 +13,12 @@ Research Harness 的内外循环设计。
 
 - Wiki 查询、索引、关系解析和校验已经实现；
 - DeepXiv 检索、归一化、去重、search-run 回写和验证已经实现；
-- Outer Research Loop 已经可以检查研究状态、计算 Gap、判断 Done、执行搜索并反馈；
-- `ingest-paper` 已有 Skill、模板和证据规则，但还没有接入确定性自动写入器；
-- `verify`、`analyze_claims`、`expand_citations` 和最终综述生成器仍待实现。
+- Outer Research Loop 可以检查研究状态、计算 Gap、判断 Done，并执行后重新观察真源；
+- `search` 已覆盖 gap-directed query planning、DeepXiv、候选筛选和 selected handoff；
+- `ingest` 已覆盖受控 arXiv PDF 交接、结构化抽取、shadow validation 和原子 Wiki 发布；
+- `verify` 已覆盖页码/数值/关系预检、语义复核和 guarded lifecycle transition；
+- `analyze_claims` 已覆盖 verified evidence 的条件对齐和 non-consensus assessment；
+- `expand_citations` 和最终综述/PPT synthesis 仍待实现。
 
 ## 1. 系统目标
 
@@ -115,7 +118,7 @@ flowchart TB
         X --> I2[re-inspect]
         I2 --> M[measure progress]
         M --> G
-        D -->|done / budget / blocked| OE[END]
+        D -->|done / budget / blocked / stalled| OE[END]
     end
 
     H --> Inner
@@ -152,6 +155,12 @@ auto-paper-research/
 │   ├── research_evaluation.py        Snapshot、Gap、Done、Progress
 │   ├── research_execution.py         有限动作执行器
 │   ├── research_models.py            Pydantic 领域契约
+│   ├── ingest_models.py              论文摄取结构化契约
+│   ├── paper_ingest.py               PDF 提取、Draft 编译、Wiki 发布
+│   ├── search_runtime.py             Query planning 与候选筛选
+│   ├── paper_sources.py              受控 arXiv PDF 获取
+│   ├── evidence_verification.py      证据复核和状态晋升
+│   ├── nonconsensus_analysis.py      Claim 条件对齐与 Assessment
 │   ├── skill_registry.py             Skill 注册表
 │   ├── tools.py                      LangChain Tool 封装
 │   ├── persistence.py                SQLite checkpoint/store
@@ -169,6 +178,7 @@ auto-paper-research/
 │   ├── indexer.py                    实体、边、反向链接和 JSON 索引
 │   ├── query.py                      搜索、邻居、关联和结构化实验查询
 │   ├── validator.py                  schema、关系和证据策略校验
+│   ├── writer.py                     Shadow 校验、原子发布与回滚
 │   ├── models.py                     Wiki 数据结构
 │   └── __main__.py                   Wiki CLI
 │
@@ -179,11 +189,9 @@ auto-paper-research/
 │   │   ├── assets/                   search-run 模板
 │   │   ├── scripts/                  建 run、执行检索、归一化、验证
 │   │   └── agents/                   Skill 元数据
-│   └── ingest-paper/
-│       ├── SKILL.md                  论文摄取与证据提取协议
-│       ├── references/               Wiki schema 与证据策略
-│       ├── assets/                   paper/concept 模板
-│       └── agents/                   Skill 元数据
+│   ├── ingest-paper/                 论文摄取与证据提取协议
+│   ├── verify-evidence/              来源复核与生命周期协议
+│   └── analyze-claims/               非共识比较协议
 │
 ├── wiki/                             领域知识真源
 │   ├── papers/                       论文实体
@@ -333,10 +341,21 @@ START
 - `ActionAttemptStats`：同一 Gap/Action 的尝试、失败和无进展次数；
 - `NonConsensusAssessment`：非共识研究产物契约；
 - `DoneCriteria` / `DoneCheck`：完成条件与检查结果；
-- `ProgressMeasurement`：前后快照差异和 novelty。
+- `ProgressMeasurement`：前后快照差异和加权 `progress_score`。
 
 `search`、`ingest`、`analyze_claims`、`expand_citations` 和 `verify` 必须指定
 `target_gap_id`，避免产生没有研究目标的动作。
+
+`ingest_models.py` 进一步定义论文摄取边界：
+
+- `PaperIngestDraft`：模型唯一允许返回的根对象；
+- `EvidenceLocator`：PDF 页、论文页、章节、表图和证据描述；
+- `MethodDraft` / `BenchmarkDraft` / `ModelDraft`：可复用实体候选；
+- `ClaimDraft` / `ExperimentDraft`：原子结论、条件和跨引用；
+- `PaperDocument` / `PaperExcerpt` / `PaperIngestResult`：PDF 输入、受限上下文和执行结果。
+
+这些对象同样 `extra="forbid"`。experiment 引用不存在的 local key、located claim 没有
+locator、或 experiment-supported claim 没有实验边，都会在调用 Writer 之前失败。
 
 ### 6.9 `research_evaluation.py`：研究状态计算
 
@@ -369,18 +388,51 @@ Gap 路由规则：
 
 ### 6.10 `research_execution.py`：有限动作执行器
 
-`DeterministicActionExecutor` 不使用 LLM Router。当前只有 `search` 有执行实现：
+`DeterministicActionExecutor` 不使用 LLM Router。当前显式支持四条路径。
 
-1. 从目标 Gap 中取得 planned query IDs；
-2. 查找包含这些 query 的 search-run；
-3. 检查网络授权、`DEEPXIV_TOKEN` 和 SDK；
-4. 通过 SkillRegistry 找到注册的 `deepxiv_search.py`；
-5. 使用当前 Python 解释器启动参数数组形式的子进程；
-6. 计算运行前后的文件 hash、query 状态和候选 ID 差异；
-7. 返回结构化 `ResearchActionResult`。
+`search`：
+
+1. 优先执行目标 Gap 已绑定的 planned query；
+2. 没有计划时，用 `search-paper` 和严格 Draft 生成最多 4 个 follow-up query；
+3. 在写入前运行 search-run validator，并原子发布新 round；
+4. 检查网络授权、`DEEPXIV_TOKEN` 和 SDK；
+5. 通过 SkillRegistry 找到注册的 `deepxiv_search.py`；
+6. 使用当前 Python 解释器启动参数数组形式的子进程；
+7. 对 metadata/abstract 做结构化五维筛选，并确定性选择最多 3 个 core handoff；
+8. 计算运行前后的 query、candidate、triage 和 selection 增量。
 
 成功但没有新增候选会记录为 `negative_research_result`，和工具故障严格区分。
-尚未实现的动作返回 `unsupported`，不会假装已执行。
+
+`ingest`：
+
+1. 只选择 `review_state: selected-for-ingest` 的 candidate；
+2. 优先使用显式、安全的仓库相对 `local_pdf_path`；
+3. 对缺少本地源的 arXiv handoff，在网络获准后限制 host、大小、PDF header 和 D 盘目标目录获取；
+4. 调用 `PaperIngestPipeline`，不让模型直接写 Markdown；
+5. 将变更页面和实体数写入 `ResearchActionResult`；
+6. Wiki 发布成功后把 candidate 从 `selected-for-ingest` 关闭为 `ingested`，记录
+   canonical paper ID、时间、页面和 diagnostics；
+7. 重建 Snapshot，让 Outer Loop 只承认真源中实际出现的增量。
+
+`verify`：
+
+1. 找到 ingested paper 和 search-run 中保留的本地 PDF；
+2. 构造 paper、method、model、benchmark、experiment、claim 的关系闭包；
+3. 确定性检查 locator 页码、实验数值可见性和 Claim evidence edge；
+4. 模型逐实体返回 `supported / contradicted / insufficient`；
+5. 只有语义结果和确定性 gate 同时通过的实体才变为 `verified`；
+6. assessment verification 还要求所有输入 claim/experiment 已 verified。
+
+`analyze_claims`：
+
+1. 只检索 verified claim 及其 verified experiment；
+2. 比较 method、model、benchmark、context、metric、sparsity 和工程条件；
+3. 生成 `supported-consensus / contested / insufficient-evidence` 之一；
+4. deterministic fingerprint 防止重复 assessment；
+5. 页面固定写成 `needs-review / verified: false`，必须由独立 `verify` 晋升。
+
+没有注入本地语义实现且未配置模型时，对应动作不会出现在 executor capability set。
+Controller 会跳过不可执行 Gap；未实现的 citation/synthesis 动作不会假装已执行。
 
 ### 6.11 `research_control.py`：Outer Research Loop
 
@@ -416,7 +468,8 @@ bootstrap
 ```
 
 每轮都会将紧凑控制状态写入 SQLite checkpoint。checkpoint namespace 带版本号，避免旧版
-Snapshot 与新版 schema 混用。
+Snapshot 与新版 schema 混用。无进展次数按 `(gap_id, action)` 记录，而不是全局累计：全部
+可执行对达到上限时是 `stalled`；有 open gap 但没有任何 executor 时是 `blocked`。
 
 ### 6.12 `cli.py`：统一入口
 
@@ -443,6 +496,12 @@ Markdown pages
   -> indexer
   -> validator
   -> query / CLI / LangChain tools
+
+proposed pages
+  -> shadow Wiki
+  -> rebuild + validate
+  -> atomic publish / rollback
+  -> generated indexes
 ```
 
 ### 7.1 实体模型
@@ -504,6 +563,21 @@ V0.2 支持八类实体：
 - assessment result 和 verified 语义是否一致；
 - 旧页面兼容与迁移警告。
 
+### 7.5 Guarded Writer
+
+`tools/wiki/writer.py` 是唯一用于摄取发布的源页面写入层：
+
+1. 规范化并限制目标为 Wiki 内非隐藏 `.md` 路径；
+2. 复制一份不含 `_generated` 的 shadow Wiki；
+3. 覆盖拟写页面并完整重建 index；
+4. 只要出现一个 `ERROR` diagnostic 就拒绝发布；
+5. 对实际页面使用同目录临时文件和 `os.replace`；
+6. 发布后再次校验并重建 `_generated`；
+7. 任一步失败则恢复之前的精确 bytes，并修复可重建索引。
+
+V1 默认拒绝覆盖已有页面。已有 paper/method/benchmark/model 通过 canonical identity 复用，
+新增 claim/experiment 使用稳定内容指纹生成 ID，因此重复执行为 no-change。
+
 ## 8. Skill 如何参与系统
 
 ### 8.1 `search-paper`
@@ -523,18 +597,45 @@ research/<topic>/search-runs/<run-id>.yaml
 
 ### 8.2 `ingest-paper`
 
-该 Skill 当前提供：
+该 Skill 和运行时现在共同提供：
 
-- 论文摄取步骤；
-- Wiki schema 参考；
-- evidence policy；
-- paper 和 concept 模板；
-- draft/needs-review 的生命周期规则。
+- V0.2 摄取步骤、Wiki schema、evidence policy 和结构化 Draft 契约；
+- paper/method/benchmark/model/claim/experiment 页面模板；
+- `validate_ingest_draft.py` 离线草稿校验；
+- 本地 PDF 页级文本提取和确定性 evidence-page 选择；
+- Skill instructions + schema/evidence references + Wiki catalog 条件化的
+  `with_structured_output(PaperIngestDraft)`；
+- canonical identity 复用、shadow Wiki 校验、事务发布与 rollback；
+- `draft` / `needs-review` 生命周期边界，禁止摄取阶段产生 `verified`。
 
-它目前没有 Python writer，也没有接入 `DeterministicActionExecutor`。因此系统会正确产生
-`ingest` Gap，但执行到该动作时会返回 `unsupported` 并停止，等待下一阶段实现。
+V1 不自动创建 concept；缺失的概念归一化需求进入 Open Questions，等待后续 `wiki-link`
+流程。已有 source page 也不会被自动改写，避免覆盖人工内容。
 
-### 8.3 LoopEngineer 反馈
+### 8.3 `verify-evidence`
+
+该 Skill 定义“什么证据可以晋升”的独立审核协议：
+
+- `verification-contract.md` 区分论文实体核验和非共识 Assessment 核验；
+- `validate_verification_draft.py` 在模型结果进入运行时前检查严格 Draft；
+- 运行时确定性检查 PDF 页码范围、实验数字是否在引用页可见、Claim 是否具有结构化
+  evidence edge；
+- 模型只判断来源是否支持该实体，不决定路径、ID 或状态迁移；
+- 只有确定性 gate 与语义 verdict 同时通过时才写入 `verified`，其余保留
+  `needs-review` 并记录原因和验证 provenance。
+
+### 8.4 `analyze-claims`
+
+该 Skill 把“寻找非共识”从数量目标改为可审核的比较任务：
+
+- `comparison-policy.md` 规定 method、model、benchmark、context、metric、sparsity、
+  hardware 等条件对齐规则；
+- `validate_assessment_draft.py` 检查输入证据、结论枚举和条件矩阵；
+- 只允许 verified claim 和 verified experiment 进入分析；
+- `supported-consensus`、`contested`、`insufficient-evidence` 都是合法结果；
+- 输出固定为 `needs-review / verified: false`，避免同一个分析步骤自我认证；
+- 稳定 fingerprint 阻止同一批证据产生重复 Assessment。
+
+### 8.5 LoopEngineer 反馈
 
 循环优化不等于让 Agent 随时改写 Skill。正确链路是：
 
@@ -573,10 +674,16 @@ research/<topic>/search-runs/<run-id>.yaml
 - core/adjacent/background/exclude 筛选状态；
 - coverage、gap、错误和 stop reason。
 
+如果现有 run 没有 eligible query，`search-paper` 会先依据当前 Gap 生成最多 4 个不重复
+follow-up query，并在 validator 通过后发布为新 round。检索结束后，模型按统一五维 rubric
+筛选 metadata/abstract，程序再确定性选择最多 3 个 core candidate。
+
 ### 阶段 D：论文摄取
 
 选中的 candidate 交给 `ingest-paper`，读取 PDF 并形成 paper、method、experiment、claim、
-benchmark 和 model 实体。当前阶段由人工或 Agent 按 Skill 执行，自动 writer 尚未接入。
+benchmark 和 model 实体。模型只负责语义抽取；程序负责路径约束、去重、ID、schema、图校验、
+原子发布和失败回滚。选中的 arXiv candidate 可以在同一次网络授权下受控获取 PDF；其他来源
+必须显式提供仓库相对路径。每轮完成后 Outer Loop 重新读取 Wiki，只有真源增量才算 progress。
 
 ### 阶段 E：证据验证和非共识评估
 
@@ -587,6 +694,10 @@ benchmark 和 model 实体。当前阶段由人工或 Agent 按 Skill 执行，�
 - `insufficient-evidence`。
 
 `insufficient-evidence` 是合法结论，系统不需要为了满足 Done 条件制造争议。
+
+`verify-evidence` 先做页码、数值、关系和状态预检，再让模型比较来源与记录；二者都通过才
+能晋升 verified。`analyze-claims` 只消费 verified inputs，生成的 assessment 固定为
+`needs-review`，随后由独立 verification pass 复核，避免一次模型判断自证正确。
 
 ### 阶段 F：Gap 驱动循环
 
@@ -651,6 +762,7 @@ search-run 重新计算研究事实，避免 controller state 成为第二份知
 - Skill resource 和 Tool 文件访问均阻止 `..` 路径穿越；
 - 子进程有 300 秒 timeout；
 - Tool 输出有字符上限并执行 Token 脱敏；
+- 自动论文源获取只允许 selected arXiv、approved HTTPS host、PDF header、大小上限和 D 盘目录；
 - 不支持的动作返回结构化 blocked/unsupported；
 - draft DoneCriteria 永远不能自动 `finish`；
 - 负面检索结果与工具故障分别建模；
@@ -687,10 +799,13 @@ D:\anaconda3\python.exe -B -m research_harness research evaluate long-context-sp
 D:\anaconda3\python.exe -B -m research_harness research step long-context-sparse-models --thread outer-v0
 ```
 
-执行自主搜索循环：
+执行自主研究循环（当前模型固定为 DeepSeek V4 Flash）：
 
 ```powershell
-$env:DEEPXIV_TOKEN = "<runtime-token>"
+$env:DEEPXIV_TOKEN = Read-Host -Prompt "DeepXiv Token" -MaskInput
+$env:HARNESS_MODEL = "openai:deepseek-v4-flash"
+$env:OPENAI_API_BASE = "https://api.deepseek.com"
+$env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
 D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-models `
   --thread outer-v1 `
   --allow-network
@@ -710,12 +825,13 @@ D:\anaconda3\python.exe -B -m unittest discover -s skills\search-paper\scripts\t
 
 | 测试组 | 数量 | 状态 |
 |---|---:|---|
-| Research Harness | 34 | 通过 |
-| Wiki Engine | 21 | 通过 |
-| Search Skill scripts | 12 | 通过 |
-| 合计 | 67 | 通过 |
+| Research Harness + Wiki | 76 | 通过 |
+| Search Skill scripts | 14 | 通过 |
+| 合计 | 90 | 通过 |
 
-此外 Black 和 Mypy 均通过。当前 Conda base 的全环境 `pip check` 会报告一个与本项目
+新增 search runtime、摄取、验证和 non-consensus 模块通过定向 Mypy、Skill quick
+validation、真实 LongLoRA PDF 的 19 页提取，以及本地
+`ingest → verify → analyze → verify` 回归。当前 Conda base 的全环境 `pip check` 会报告一个与本项目
 代码无关的既有版本冲突：`pyOpenSSL 25.0.0` 要求 `cryptography < 45`，而环境中安装的是
 `cryptography 48.0.0`。项目回归测试不受该冲突影响；正式部署时建议使用独立虚拟环境或
 统一这两个包的版本。当前真实研究快照仍然是：
@@ -734,12 +850,11 @@ Q01-Q08 = planned
 
 建议继续保持有限、显式的执行器映射：
 
-1. 实现 `ingest-paper` 的结构化 extractor/writer；
-2. 写入前增加 duplicate resolution 和 Wiki transaction/rollback；
-3. 实现 evidence locator 校验和 `verify` executor；
-4. 实现 `NonConsensusAssessment` 生成及人工审核入口；
-5. 拆分 candidate saturation 与 evidence saturation；
-6. 接入 citation expansion；
-7. 最后实现综述 Markdown/PPT 的 synthesis 和质量评估。
+1. 用 3–5 篇不同版式论文运行真实 V4 Flash 摄取/验证，收集 extraction 与 verification failure taxonomy；
+2. 增加已有 paper 的保守 merge proposal，而不是直接覆盖人工页面；
+3. 拆分 candidate saturation 与 evidence saturation；
+4. 接入 backward/forward citation expansion；
+5. 增加 repository ownership、kernel build 和 reproducibility 证据链；
+6. 最后实现综述 Markdown/PPT synthesis、引用审计和报告质量评估。
 
 在这些动作具备确定性前置条件、结果契约和回归测试之前，不建议加入“智能 Skill Router”。

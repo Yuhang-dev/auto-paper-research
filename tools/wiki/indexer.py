@@ -103,7 +103,8 @@ class WikiIndex:
             str(entity.entity_type or "unknown") for entity in unique.values()
         )
         by_status = Counter(
-            str(entity.metadata.get("status") or "unknown") for entity in unique.values()
+            str(entity.metadata.get("status") or "unknown")
+            for entity in unique.values()
         )
         by_schema = Counter(
             str(entity.schema_version or "legacy") for entity in unique.values()
@@ -208,7 +209,7 @@ def _source_hash(wiki_root: Path, meta_root: Path) -> str:
 def _relation_edges(entity: Entity, schema: WikiSchema) -> Iterable[Edge]:
     entity_id = entity.entity_id
     if not entity_id:
-        return
+        return ()
 
     edges: List[Edge] = []
     relations = entity.metadata.get("relations", {})
@@ -268,7 +269,9 @@ def _deduplicate_edges(edges: Iterable[Edge]) -> List[Edge]:
     )
 
 
-def _resolve_links(entities: Sequence[Entity], resolver: Resolver) -> List[ResolvedLink]:
+def _resolve_links(
+    entities: Sequence[Entity], resolver: Resolver
+) -> List[ResolvedLink]:
     resolved: List[ResolvedLink] = []
     for entity in entities:
         source = entity.entity_id or f"@path:{entity.relative_path}"
@@ -306,9 +309,7 @@ def build_index(wiki_root: Path, meta_root: Optional[Path] = None) -> WikiIndex:
     entities = parse_wiki(wiki_root)
     resolver = Resolver(entities, schema)
     edges = _deduplicate_edges(
-        edge
-        for entity in entities
-        for edge in _relation_edges(entity, schema)
+        edge for entity in entities for edge in _relation_edges(entity, schema)
     )
     links = _resolve_links(entities, resolver)
     return WikiIndex(
@@ -325,12 +326,15 @@ def build_index(wiki_root: Path, meta_root: Optional[Path] = None) -> WikiIndex:
 
 def _write_json_atomic(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    rendered = json.dumps(
-        json_safe(value),
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
+    rendered = (
+        json.dumps(
+            json_safe(value),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
     temporary_path: Optional[Path] = None
     try:
         with tempfile.NamedTemporaryFile(

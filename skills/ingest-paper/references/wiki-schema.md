@@ -1,151 +1,103 @@
-# LLM-Wiki Schema
+# LLM-Wiki V0.2 Write Contract
 
-## Purpose
+Markdown under `wiki/` is the source of truth. JSON under `wiki/_generated/` is
+rebuildable output and must never be edited as source.
 
-Use this schema as the V0 contract for all pages written by `ingest-paper`.
-Markdown files under `wiki/` are the source of truth.
+The machine-readable authority is `wiki/_meta/schema.yaml` together with
+`wiki/_meta/relation-types.yaml`. This reference summarizes only what
+`ingest-paper` writes.
 
-## Directory layout
+## Entity layout
 
 ```text
 wiki/
 ├── papers/
-├── concepts/
+├── methods/
 ├── benchmarks/
-└── errors/
+├── models/
+├── claims/
+└── experiments/
 ```
 
-- Store one paper per file under `wiki/papers/`.
-- Store reusable concepts, methods, techniques, and architectures under `wiki/concepts/`.
-- Link existing benchmark pages under `wiki/benchmarks/`.
-- Do not write to `wiki/errors/` during ingestion unless explicitly requested.
+Canonical IDs use `<type>:<lowercase-kebab-slug>`. Body links use canonical IDs,
+for example `[[method:shifted-sparse-attention]]`; path links are legacy-only.
 
-## File names and IDs
+## Base frontmatter
 
-- Use lowercase kebab-case file names, such as `longlora.md`.
-- Keep a page ID stable after creation.
-- Format paper IDs as `paper:<slug>`.
-- Format concept IDs as `concept:<slug>`.
-- Prefer DOI, then arXiv ID, then normalized title when checking paper duplicates.
-- Update an existing page when any canonical identifier matches.
-- Use `null` for unavailable metadata; never guess a value.
-
-## Wiki links
-
-Treat `wiki/` as the link root and omit the `.md` extension:
-
-```markdown
-[[papers/longlora]]
-[[concepts/shifted-sparse-attention]]
-[[benchmarks/longbench]]
-[[concepts/shifted-sparse-attention|Shifted Sparse Attention]]
-```
-
-Link only to pages that exist. Record a missing target under `Open Questions`
-instead of creating an unsupported page. Do not manually maintain backlinks.
-
-## Paper page
-
-Use this required frontmatter:
+Every new page requires:
 
 ```yaml
----
-id: "paper:<slug>"
-type: paper
-title: "<paper title>"
-authors:
-  - "<author>"
-year: 2023
-venue: null
-identifiers:
-  arxiv: null
-  doi: null
-urls:
-  paper: "<canonical paper URL>"
-status: draft
----
-```
-
-Allowed page statuses are:
-
-- `draft`: ingested but not independently verified;
-- `needs-review`: incomplete source access, unresolved identity, or uncertain evidence;
-- `verified`: reserved for a separate evidence-verification workflow.
-
-Include these body sections in this order:
-
-1. `Problem`
-2. `Method`
-3. `Key Claims`
-4. `Experiments`
-5. `Limitations`
-6. `Wiki Links`
-7. `Open Questions`
-
-### Claim records
-
-Keep claims inside the paper page in V0. Give each claim a stable page-local ID:
-
-```markdown
-### C1
-
-- **Statement:** A scoped, atomic claim.
-- **Attribution:** author
-- **Evidence type:** experiment-supported
-- **Evidence location:** PDF p. 7, Table 2
-- **Scope:** Model, dataset, context length, metric, and other conditions.
-- **Evidence status:** located
-```
-
-Use these controlled values:
-
-- `Attribution`: `author` or `agent-analysis`;
-- `Evidence type`: `author-stated`, `experiment-supported`, or `inferred`;
-- `Evidence status`: `located`, `partial`, or `unlocated`.
-
-Do not renumber existing claim IDs during an update. Append the next available ID.
-
-### Experiment records
-
-Record important results in a table with these columns:
-
-```markdown
-| ID | Model | Dataset / Benchmark | Setting | Baseline | Metric | Result | Evidence |
-|---|---|---|---|---|---|---|---|
-```
-
-Use stable page-local experiment IDs such as `E1`. Put setup details that do not
-fit the table immediately above or below it.
-
-## Concept page
-
-Methods are concept pages with `kind: method`; do not create a separate methods
-directory in V0.
-
-Use this required frontmatter:
-
-```yaml
----
-id: "concept:<slug>"
-type: concept
-title: "<canonical name>"
+schema_version: "0.2"
+id: "<type>:<slug>"
+type: "<type>"
+title: "<title>"
 aliases: []
-kind: concept
 status: draft
----
+created_at: "<ISO-8601 timestamp>"
+updated_at: "<ISO-8601 timestamp>"
+relations: {}
 ```
 
-Allowed `kind` values are `concept`, `method`, `technique`, and `architecture`.
-Include `Definition`, `Scope`, `Distinguishing Features`, `Provenance`,
-`Linked Papers`, `Related Concepts`, and `Notes` sections.
+Optional `facets` must use research facet IDs. Ingestion may assign `draft` or
+`needs-review`; it must not assign `verified`.
 
-Create a concept page only when it is reusable across papers. Add alternate names
-to `aliases` instead of creating duplicate pages.
+## Type-specific fields
 
-## Update rules
+### Paper
 
-- Preserve correct existing content and merge new evidence into it.
-- Do not silently remove claims, identifiers, aliases, or manually written notes.
-- Mark conflicting evidence explicitly under `Open Questions`.
-- Replace or remove all `{{placeholder}}` tokens copied from an asset.
-- Do not add frontmatter fields or body sections outside this schema unless requested.
+Required: `authors`, `year`, `identifiers`, and `urls`. Optional `venue` is a
+string or `null` and must not be inferred from an unsupported source.
+
+Structured relations:
+
+- `proposes` → method;
+- `reports` → experiment.
+
+An experiment's `paper` field also creates the inverse paper→experiment edge.
+
+### Method
+
+Required: `definition`. Optional: `sparsity`, `implementations`.
+
+Do not store a new method as `concept(kind: method)`. That is legacy V0 behavior.
+
+### Benchmark
+
+Required: `task`, `metrics`, and `source`. `source` contains a canonical URL or
+paper ID.
+
+### Model
+
+Required: `family`, `parameters`, and `source`.
+
+### Claim
+
+Required: `statement`, `assessment`, and `scope`. New claims use
+`assessment: open`. Evidence attribution and extraction state belong in `scope`
+and the body. Lifecycle status is not epistemic assessment.
+
+### Experiment
+
+Required:
+
+- `paper`;
+- `method`;
+- `model`;
+- `benchmark`;
+- `context_length`;
+- `sparsity`;
+- `metric`;
+- `result`;
+- `evidence`.
+
+`evidence.locator` must be reproducible. `relations.supports` and
+`relations.contradicts` point from experiments to claims.
+
+## Publication invariants
+
+- Reuse exact paper identity and equivalent typed entities.
+- Never create duplicate canonical IDs or ambiguous aliases intentionally.
+- Link only canonical IDs that exist in the staged graph.
+- Never overwrite an existing source page in V1 ingestion.
+- Reject publication when the staged Wiki contains any `ERROR` diagnostic.
+- Rebuild generated indexes only after source publication succeeds.

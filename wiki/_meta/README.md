@@ -46,8 +46,13 @@ experiment supports a claim.
 
 - `candidate`
 - `draft`
+- `needs-review`
 - `verified`
 - `deprecated`
+
+`needs-review` is an ingested source page with unresolved identity, source access,
+or central evidence. Like `draft`, it contributes partial rather than verified
+evidence coverage.
 
 Claim epistemic state belongs in the claim page's `assessment` field:
 

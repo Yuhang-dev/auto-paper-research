@@ -90,5 +90,6 @@ under `Agent analysis`. Give inferred limitations an evidence locator when possi
 
 ## Verification boundary
 
-The ingestion workflow may create `draft` or `needs-review` pages only.
+The ingestion workflow may create `draft` or `needs-review` pages only. Both are
+valid V0.2 lifecycle states and contribute partial, not verified, evidence.
 It must not assign `verified` to a page or describe its own extraction as independently verified.

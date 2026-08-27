@@ -48,7 +48,7 @@ inspect_research        从 Wiki 与 search-run YAML 计算快照
   ↓
 evaluate_gaps          生成可测量 Gap 候选
   ↓
-measure_progress       计算新增论文/方法/claim/实验等 novelty yield
+measure_progress       计算新增论文/方法/claim/实验等 progress score
   ↓
 check_done             Coverage + Quality + Saturation + Budget
   ↓
@@ -57,7 +57,7 @@ decide_next_action     在有限动作集合中确定下一步
 END                    返回一个控制决策
 ```
 
-V1 在同一组确定性 contracts 上接入了第一条自主执行路径：
+V1 在同一组确定性 contracts 上接入了可达的研究执行链：
 
 ```text
 inspect → evaluate → check_done
@@ -65,7 +65,11 @@ inspect → evaluate → check_done
                      ▼
                   decide
                      ▼
-            execute_action ── search ──→ search-paper/DeepXiv
+            execute_action
+              ├─ search ─────────→ plan / DeepXiv / screen
+              ├─ ingest ─────────→ acquire PDF / extract / publish draft
+              ├─ verify ─────────→ source checks / guarded promotion
+              └─ analyze_claims ─→ needs-review assessment
                      ▼
                   inspect
                      ▼
@@ -75,9 +79,11 @@ inspect → evaluate → check_done
                      └──────────────────↺
 ```
 
-当前只支持确定性的 `search → search-paper` 映射，不使用 LLM Router。网络未获
-授权、Token 缺失、没有已验证的 query plan 或遇到尚未接入的 `ingest/verify`
-时，图会返回结构化 `ActionResult` 并安全停止，不会空转或伪装成已执行。
+系统不使用 LLM Router。Outer Loop 只在显式 action table 中选择 `search / ingest /
+verify / analyze_claims`；每个动作再加载对应 Skill。模型负责 query 语义规划、候选
+筛选、论文结构化抽取、证据语义比较和 claim 条件对齐；程序负责 ID、路径、下载边界、
+页码和数值预检、schema、状态迁移、原子发布与回滚。网络未授权或凭证/前置条件缺失时，
+图会返回结构化 `ActionResult` 并安全停止。
 
 状态分为三层：
 
@@ -129,13 +135,15 @@ frontmatter、路径穿越和逃逸 Skill 根目录的资源。
 当前边界刻意保持简单：
 
 ```text
-已实现：SkillRegistry + 按需资源读取 + search 动作的确定性 Skill executor
-未实现：LLM Skill Router / 通用 SkillExecutor / ingest 与 verify subgraph
+已实现：SkillRegistry + 按需资源读取 + search/ingest/verify/analyze_claims 显式 executor
+未实现：LLM Skill Router / 通用 SkillExecutor / citation expansion / synthesis subgraph
 ```
 
-Registry 本身仍只负责发现和检查。Outer Loop 使用显式 action table 把 `search`
-绑定到已注册的 `search-paper/scripts/deepxiv_search.py`；`ingest-paper` 仍是待绑定
-执行图的规范和模板。
+Registry 本身仍只负责发现和检查。Outer Loop 使用显式 action table：`search`
+绑定 query planning、DeepXiv 和候选筛选；`ingest` 绑定受控 PDF 交接和
+`PaperIngestPipeline`；`verify` 绑定来源复核与 guarded lifecycle transition；
+`analyze_claims` 只消费 verified evidence 并创建待独立复核的 assessment。没有通用
+Skill 解释器，也不会让模型自行选择任意脚本。
 
 ### Research contracts and Done gate
 
@@ -195,12 +203,14 @@ PyYAML 6.0.2、Pydantic 2.10.3。
 PowerShell 会话中设置：
 
 ```powershell
-$env:HARNESS_MODEL = "openai:gpt-4.1-mini"
-$env:OPENAI_API_KEY = Read-Host -Prompt "OpenAI API Key" -MaskInput
+$env:HARNESS_MODEL = "openai:deepseek-v4-flash"
+$env:OPENAI_API_BASE = "https://api.deepseek.com"
+$env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
 ```
 
-不要把 OpenAI 或 DeepXiv Key 写入 `.env`、YAML、SQLite research memory、
-命令参数或日志。
+这里的 `OPENAI_*` 名称来自 LangChain 的 OpenAI-compatible adapter；Base URL 明确
+指向 DeepSeek，模型固定为 `deepseek-v4-flash`。不要把 DeepSeek 或 DeepXiv Key 写入
+`.env`、YAML、SQLite research memory、命令参数或日志。
 
 DeepXiv SDK 只在获准的非 dry-run 调用中延迟导入；其 tiktoken 编码缓存默认
 定向到 `D:\wiki-papersearch\.harness\tiktoken-cache`，离线诊断和测试不会为了
@@ -281,8 +291,19 @@ D:\anaconda3\python.exe -B -m research_harness research run `
   long-context-sparse-models --thread outer-v1 --allow-network
 ```
 
-该命令会由 Harness 自己记录动作、工具调用和进展。首轮 search 完成后，如果
-下一决策是尚未接入的 `ingest`，V1 会以 `unsupported-action` 停止并保留 checkpoint。
+该命令会由 Harness 自己记录动作、工具调用和进展。候选筛选会把最多 3 个 core paper
+变为 `selected-for-ingest`。对选中的 arXiv candidate，在同一次 `--allow-network`
+授权下，Ingest 可以受控下载公共 PDF 到 D 盘仓库：
+
+```yaml
+local_pdf_path: sources/papers/arxiv-<id>.pdf
+```
+
+也可以人工放置 PDF 并设置该路径。自动下载只支持显式选中的 arXiv candidate，并限制
+HTTPS host、文件类型、目标目录和最大字节数。远程 query planning、screening、ingest、
+verify 与 analyze_claims 均受同一次 `--allow-network` 授权；未配置模型时语义动作不会
+进入 executor capability set。发布完成后 Harness 会把 candidate 改为 `ingested` 并
+记录 canonical paper ID，避免下一轮重复处理同一 handoff。
 
 Research memory 只接受紧凑的 `observation / decision / preference /
 open-question`。没有 evidence ID 的内容会标为 `unverified-note`，不会自动升级为
@@ -293,12 +314,21 @@ Wiki 事实。
 ```text
 research question
   -> search-paper
+  -> validated query plan (existing or gap-directed)
+  -> DeepXiv retrieval
   -> candidate search-run YAML
-  -> human/agent relevance screening
+  -> structured relevance screening / selected handoff
+  -> bounded arXiv PDF acquisition or explicit local PDF
   -> ingest-paper
-  -> draft Wiki paper/concept pages
-  -> evidence verification
-  -> verified knowledge or Error Book
+  -> PaperIngestDraft
+  -> shadow Wiki validation
+  -> draft paper/method/benchmark/model/claim/experiment pages
+  -> verify-evidence
+  -> verified source records
+  -> analyze-claims
+  -> needs-review non-consensus assessment
+  -> independent verify-evidence
+  -> verified assessment or explicit unresolved result
 ```
 
 检索结果首先是 `candidate`，不能直接当作论文结论。只有读取论文正文并走
@@ -307,11 +337,14 @@ research question
 ## Skills
 
 - `skills/search-paper/`：检索规划、DeepXiv 发现、候选集、coverage 与 gap；
-- `skills/ingest-paper/`：把选中的论文转换为结构化 Wiki 页面。
+- `skills/ingest-paper/`：把选中的论文转换为结构化 Wiki 页面；
+- `skills/verify-evidence/`：来源、locator、实验条件和生命周期复核；
+- `skills/analyze-claims/`：比较 verified claims，生成共识/争议/证据不足 assessment。
 
-`ingest-paper` 当前仍使用早期 V0 写入模板，尚未接入执行图。Wiki Engine V0.2
-会以兼容模式读取现有 legacy 页面；在接入 ingest executor 前仍需单独迁移模板并
-实现安全 Writer，不会自动改写现有知识真源。
+`ingest-paper` 已迁移到 Wiki V0.2，并通过严格 Pydantic Draft、页级 locator、typed
+entity 复用和 guarded Writer 接入 Outer Loop。模型不能直接写 Markdown；拟写页面先在
+shadow Wiki 重建图并通过零 schema error 校验，再原子发布。发布失败会回滚，重复摄取同一
+Draft 为 no-change。现有 legacy 页面继续兼容读取，V1 默认不会覆盖人工 source page。
 
 ## Wiki Engine V0.2
 

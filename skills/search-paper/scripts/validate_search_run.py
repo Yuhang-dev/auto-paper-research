@@ -45,11 +45,18 @@ REVIEW_STATES = {
     "metadata-only",
     "abstract-screened",
     "selected-for-ingest",
+    "ingested",
     "excluded",
     "needs-review",
 }
 COVERAGE_STATUSES = {"covered", "partial", "missing", "not-required"}
-RELEVANCE_BASES = {None, "title-only", "title-and-abstract", "provider-metadata", "manual-note"}
+RELEVANCE_BASES = {
+    None,
+    "title-only",
+    "title-and-abstract",
+    "provider-metadata",
+    "manual-note",
+}
 SECRET_KEY_NAMES = {
     "token",
     "deepxiv_token",
@@ -87,7 +94,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Treat warnings as a failing validation result.",
     )
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable issues.")
+    parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable issues."
+    )
     return parser.parse_args(argv)
 
 
@@ -109,10 +118,18 @@ def _walk(value: Any, path: str = "$") -> Iterable[Tuple[str, Any, Optional[str]
             yield from _walk(item, child)
 
 
-def _validate_secrets_and_placeholders(run: Mapping[str, Any], issues: List[Issue]) -> None:
+def _validate_secrets_and_placeholders(
+    run: Mapping[str, Any], issues: List[Issue]
+) -> None:
     for path, value, key in _walk(run):
-        if key and key.casefold() in SECRET_KEY_NAMES and value not in (None, "", [], {}):
-            _issue(issues, "error", path, "Credential-like field must not contain a value.")
+        if (
+            key
+            and key.casefold() in SECRET_KEY_NAMES
+            and value not in (None, "", [], {})
+        ):
+            _issue(
+                issues, "error", path, "Credential-like field must not contain a value."
+            )
         if isinstance(value, str):
             if PLACEHOLDER_PATTERN.search(value):
                 _issue(issues, "error", path, "Unresolved template placeholder.")
@@ -142,7 +159,9 @@ def _validate_run_header(run: Mapping[str, Any], issues: List[Issue]) -> None:
     if status not in RUN_STATUSES:
         _issue(issues, "error", "$.run.status", f"Unsupported status: {status!r}.")
     if status == "complete" and not header.get("stop_reason"):
-        _issue(issues, "error", "$.run.stop_reason", "Complete runs require a stop reason.")
+        _issue(
+            issues, "error", "$.run.stop_reason", "Complete runs require a stop reason."
+        )
 
     provider = header.get("provider")
     if not isinstance(provider, Mapping):
@@ -150,7 +169,12 @@ def _validate_run_header(run: Mapping[str, Any], issues: List[Issue]) -> None:
     else:
         for field in ("name", "interface", "package_version", "source"):
             if not provider.get(field):
-                _issue(issues, "error", f"$.run.provider.{field}", "Required value is missing.")
+                _issue(
+                    issues,
+                    "error",
+                    f"$.run.provider.{field}",
+                    "Required value is missing.",
+                )
 
     budget = header.get("budget")
     if not isinstance(budget, Mapping):
@@ -158,9 +182,19 @@ def _validate_run_header(run: Mapping[str, Any], issues: List[Issue]) -> None:
     else:
         max_queries = budget.get("max_queries")
         if not isinstance(max_queries, int) or max_queries < 1:
-            _issue(issues, "error", "$.run.budget.max_queries", "Must be a positive integer.")
+            _issue(
+                issues,
+                "error",
+                "$.run.budget.max_queries",
+                "Must be a positive integer.",
+            )
         elif isinstance(run.get("queries"), list) and len(run["queries"]) > max_queries:
-            _issue(issues, "error", "$.queries", "Query count exceeds run.budget.max_queries.")
+            _issue(
+                issues,
+                "error",
+                "$.queries",
+                "Query count exceeds run.budget.max_queries.",
+            )
 
 
 def _validate_scope(run: Mapping[str, Any], issues: List[Issue]) -> None:
@@ -168,13 +202,28 @@ def _validate_scope(run: Mapping[str, Any], issues: List[Issue]) -> None:
     if not isinstance(scope, Mapping):
         _issue(issues, "error", "$.scope", "Scope mapping is required.")
         return
-    for field in ("included_concepts", "excluded_concepts", "required_facets", "assumptions"):
+    for field in (
+        "included_concepts",
+        "excluded_concepts",
+        "required_facets",
+        "assumptions",
+    ):
         if not isinstance(scope.get(field), list):
             _issue(issues, "error", f"$.scope.{field}", "Expected a list.")
     if not scope.get("included_concepts"):
-        _issue(issues, "warning", "$.scope.included_concepts", "Search scope is not yet explicit.")
+        _issue(
+            issues,
+            "warning",
+            "$.scope.included_concepts",
+            "Search scope is not yet explicit.",
+        )
     if not scope.get("required_facets"):
-        _issue(issues, "warning", "$.scope.required_facets", "No coverage facets are defined.")
+        _issue(
+            issues,
+            "warning",
+            "$.scope.required_facets",
+            "No coverage facets are defined.",
+        )
 
 
 def _validate_queries(
@@ -191,7 +240,9 @@ def _validate_queries(
     query_ids: Set[str] = set()
     query_rounds: Dict[str, int] = {}
     signatures: Dict[str, str] = {}
-    default_source = str(((run.get("run") or {}).get("provider") or {}).get("source") or "arxiv")
+    default_source = str(
+        ((run.get("run") or {}).get("provider") or {}).get("source") or "arxiv"
+    )
 
     for index, query in enumerate(queries):
         path = f"$.queries[{index}]"
@@ -200,7 +251,12 @@ def _validate_queries(
             continue
         query_id = str(query.get("id") or "")
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", query_id):
-            _issue(issues, "error", f"{path}.id", "Query ID is missing or filesystem-unsafe.")
+            _issue(
+                issues,
+                "error",
+                f"{path}.id",
+                "Query ID is missing or filesystem-unsafe.",
+            )
         elif query_id in query_ids:
             _issue(issues, "error", f"{path}.id", f"Duplicate query ID {query_id}.")
         else:
@@ -208,7 +264,9 @@ def _validate_queries(
 
         round_value = query.get("round")
         if not isinstance(round_value, int) or round_value < 1:
-            _issue(issues, "error", f"{path}.round", "Round must be a positive integer.")
+            _issue(
+                issues, "error", f"{path}.round", "Round must be a positive integer."
+            )
         else:
             query_rounds[query_id] = round_value
 
@@ -216,7 +274,9 @@ def _validate_queries(
         if not text:
             _issue(issues, "error", f"{path}.text", "Query text is required.")
         elif len(text) > 500:
-            _issue(issues, "error", f"{path}.text", "DeepXiv query exceeds 500 characters.")
+            _issue(
+                issues, "error", f"{path}.text", "DeepXiv query exceeds 500 characters."
+            )
         if not query.get("family"):
             _issue(issues, "warning", f"{path}.family", "Query family is missing.")
         if not query.get("purpose"):
@@ -229,24 +289,50 @@ def _validate_queries(
             size = filters.get("size", 20)
             offset = filters.get("offset", 0)
             if not isinstance(size, int) or not 1 <= size <= 100:
-                _issue(issues, "error", f"{path}.filters.size", "Size must be 1 to 100.")
+                _issue(
+                    issues, "error", f"{path}.filters.size", "Size must be 1 to 100."
+                )
             if not isinstance(offset, int) or not 0 <= offset <= 10000:
-                _issue(issues, "error", f"{path}.filters.offset", "Offset must be 0 to 10000.")
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.filters.offset",
+                    "Offset must be 0 to 10000.",
+                )
 
         execution = query.get("execution")
         if not isinstance(execution, Mapping):
-            _issue(issues, "error", f"{path}.execution", "Execution mapping is required.")
+            _issue(
+                issues, "error", f"{path}.execution", "Execution mapping is required."
+            )
         else:
             status = execution.get("status")
             if status not in QUERY_STATUSES:
-                _issue(issues, "error", f"{path}.execution.status", f"Unsupported status: {status!r}.")
-            if status in {"succeeded", "empty", "failed"} and not execution.get("executed_at"):
-                _issue(issues, "error", f"{path}.execution.executed_at", "Executed query needs a timestamp.")
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.execution.status",
+                    f"Unsupported status: {status!r}.",
+                )
+            if status in {"succeeded", "empty", "failed"} and not execution.get(
+                "executed_at"
+            ):
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.execution.executed_at",
+                    "Executed query needs a timestamp.",
+                )
             raw_path = execution.get("raw_result_path")
             if raw_path:
                 candidate_path = Path(str(raw_path))
                 if candidate_path.is_absolute() or ".." in candidate_path.parts:
-                    _issue(issues, "error", f"{path}.execution.raw_result_path", "Raw path must be relative and safe.")
+                    _issue(
+                        issues,
+                        "error",
+                        f"{path}.execution.raw_result_path",
+                        "Raw path must be relative and safe.",
+                    )
 
         signature = query_signature(query, default_source)
         predecessor = signatures.get(signature)
@@ -289,63 +375,209 @@ def _validate_candidates(
         if not candidate_id:
             _issue(issues, "error", f"{path}.candidate_id", "Candidate ID is required.")
         elif candidate_id in candidate_ids:
-            _issue(issues, "error", f"{path}.candidate_id", f"Duplicate candidate {candidate_id}.")
+            _issue(
+                issues,
+                "error",
+                f"{path}.candidate_id",
+                f"Duplicate candidate {candidate_id}.",
+            )
         else:
             candidate_ids.add(candidate_id)
         if expected_id and candidate_id != expected_id:
             _issue(issues, "error", f"{path}.candidate_id", f"Expected {expected_id}.")
         if candidate.get("status") != "candidate":
-            _issue(issues, "error", f"{path}.status", "Search output status must be candidate.")
+            _issue(
+                issues,
+                "error",
+                f"{path}.status",
+                "Search output status must be candidate.",
+            )
         if not candidate.get("title"):
             _issue(issues, "warning", f"{path}.title", "Provider title is missing.")
         if not candidate.get("authors"):
-            _issue(issues, "warning", f"{path}.authors", "Provider authors are missing.")
+            _issue(
+                issues, "warning", f"{path}.authors", "Provider authors are missing."
+            )
         if not candidate.get("year"):
             _issue(issues, "warning", f"{path}.year", "Publication year is missing.")
 
         discoveries = candidate.get("discovered_by")
         if not isinstance(discoveries, list) or not discoveries:
-            _issue(issues, "error", f"{path}.discovered_by", "At least one discovery record is required.")
+            _issue(
+                issues,
+                "error",
+                f"{path}.discovered_by",
+                "At least one discovery record is required.",
+            )
         else:
             for discovery_index, discovery in enumerate(discoveries):
                 discovery_path = f"{path}.discovered_by[{discovery_index}]"
                 if not isinstance(discovery, Mapping):
-                    _issue(issues, "error", discovery_path, "Discovery must be a mapping.")
+                    _issue(
+                        issues, "error", discovery_path, "Discovery must be a mapping."
+                    )
                     continue
                 if str(discovery.get("query_id")) not in query_ids:
-                    _issue(issues, "error", f"{discovery_path}.query_id", "Unknown query ID.")
+                    _issue(
+                        issues,
+                        "error",
+                        f"{discovery_path}.query_id",
+                        "Unknown query ID.",
+                    )
                 rank = discovery.get("provider_rank")
                 if not isinstance(rank, int) or rank < 1:
-                    _issue(issues, "error", f"{discovery_path}.provider_rank", "Rank must be positive.")
+                    _issue(
+                        issues,
+                        "error",
+                        f"{discovery_path}.provider_rank",
+                        "Rank must be positive.",
+                    )
 
         relevance = candidate.get("relevance")
         if not isinstance(relevance, Mapping):
-            _issue(issues, "error", f"{path}.relevance", "Relevance mapping is required.")
+            _issue(
+                issues, "error", f"{path}.relevance", "Relevance mapping is required."
+            )
         else:
             label = relevance.get("label")
             if label is None:
-                _issue(issues, "warning", f"{path}.relevance.label", "Candidate is untriaged.")
+                _issue(
+                    issues,
+                    "warning",
+                    f"{path}.relevance.label",
+                    "Candidate is untriaged.",
+                )
             elif label not in RELEVANCE_LABELS:
-                _issue(issues, "error", f"{path}.relevance.label", f"Unsupported label: {label!r}.")
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.relevance.label",
+                    f"Unsupported label: {label!r}.",
+                )
             scores = relevance.get("scores")
             if not isinstance(scores, Mapping):
-                _issue(issues, "error", f"{path}.relevance.scores", "Scores mapping is required.")
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.relevance.scores",
+                    "Scores mapping is required.",
+                )
             else:
                 for field in RELEVANCE_SCORE_FIELDS:
                     score = scores.get(field)
-                    if score is not None and (not isinstance(score, int) or not 0 <= score <= 2):
-                        _issue(issues, "error", f"{path}.relevance.scores.{field}", "Score must be 0, 1, 2, or null.")
+                    if score is not None and (
+                        not isinstance(score, int) or not 0 <= score <= 2
+                    ):
+                        _issue(
+                            issues,
+                            "error",
+                            f"{path}.relevance.scores.{field}",
+                            "Score must be 0, 1, 2, or null.",
+                        )
             basis = relevance.get("basis")
             if basis not in RELEVANCE_BASES:
-                _issue(issues, "error", f"{path}.relevance.basis", f"Unsupported basis: {basis!r}.")
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.relevance.basis",
+                    f"Unsupported basis: {basis!r}.",
+                )
             if label is not None and not relevance.get("reason"):
-                _issue(issues, "error", f"{path}.relevance.reason", "Triaged candidate needs a reason.")
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.relevance.reason",
+                    "Triaged candidate needs a reason.",
+                )
 
         review_state = candidate.get("review_state")
         if review_state not in REVIEW_STATES:
-            _issue(issues, "error", f"{path}.review_state", f"Unsupported state: {review_state!r}.")
+            _issue(
+                issues,
+                "error",
+                f"{path}.review_state",
+                f"Unsupported state: {review_state!r}.",
+            )
         if review_state == "excluded" and not candidate.get("exclusion_reason"):
-            _issue(issues, "error", f"{path}.exclusion_reason", "Excluded candidate needs a reason.")
+            _issue(
+                issues,
+                "error",
+                f"{path}.exclusion_reason",
+                "Excluded candidate needs a reason.",
+            )
+        if review_state == "ingested":
+            ingest = candidate.get("ingest")
+            if not isinstance(ingest, Mapping):
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.ingest",
+                    "An ingested candidate requires a handoff mapping.",
+                )
+            else:
+                paper_id = str(ingest.get("paper_id") or "")
+                if not paper_id.startswith("paper:"):
+                    _issue(
+                        issues,
+                        "error",
+                        f"{path}.ingest.paper_id",
+                        "Expected a canonical paper: ID.",
+                    )
+                if ingest.get("status") not in {"published", "no-change"}:
+                    _issue(
+                        issues,
+                        "error",
+                        f"{path}.ingest.status",
+                        "Expected published or no-change.",
+                    )
+                if not ingest.get("ingested_at"):
+                    _issue(
+                        issues,
+                        "error",
+                        f"{path}.ingest.ingested_at",
+                        "Ingestion timestamp is required.",
+                    )
+                wiki_paths = ingest.get("wiki_paths")
+                if not isinstance(wiki_paths, list):
+                    _issue(
+                        issues,
+                        "error",
+                        f"{path}.ingest.wiki_paths",
+                        "Expected a list of Wiki source paths.",
+                    )
+                else:
+                    for source_path in wiki_paths:
+                        wiki_path = Path(str(source_path))
+                        if (
+                            wiki_path.is_absolute()
+                            or ".." in wiki_path.parts
+                            or wiki_path.suffix.casefold() != ".md"
+                            or not str(source_path)
+                            .replace("\\", "/")
+                            .startswith("wiki/")
+                        ):
+                            _issue(
+                                issues,
+                                "error",
+                                f"{path}.ingest.wiki_paths",
+                                "Expected safe repository-relative wiki/*.md paths.",
+                            )
+                            break
+        local_pdf_path = candidate.get("local_pdf_path")
+        if local_pdf_path is not None:
+            pdf_path = Path(str(local_pdf_path))
+            if (
+                not str(local_pdf_path).strip()
+                or pdf_path.is_absolute()
+                or ".." in pdf_path.parts
+                or pdf_path.suffix.casefold() != ".pdf"
+            ):
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.local_pdf_path",
+                    "Expected a safe repository-relative .pdf path.",
+                )
 
     for index, candidate in enumerate(candidates):
         if not isinstance(candidate, Mapping):
@@ -385,15 +617,22 @@ def _validate_coverage(
         else:
             name = str(facet.get("name"))
             if name in facet_names:
-                _issue(issues, "error", f"{path}.name", f"Duplicate coverage facet {name}.")
+                _issue(
+                    issues, "error", f"{path}.name", f"Duplicate coverage facet {name}."
+                )
             facet_names.add(name)
         if facet.get("status") not in COVERAGE_STATUSES:
             _issue(issues, "error", f"{path}.status", "Unsupported coverage status.")
         for candidate_id in facet.get("candidate_ids", []) or []:
             if candidate_id not in candidate_ids:
-                _issue(issues, "error", f"{path}.candidate_ids", f"Unknown candidate {candidate_id}.")
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.candidate_ids",
+                    f"Unknown candidate {candidate_id}.",
+                )
 
-    required_facets = ((run.get("scope") or {}).get("required_facets") or [])
+    required_facets = (run.get("scope") or {}).get("required_facets") or []
     for required in required_facets:
         if str(required) not in facet_names:
             _issue(
@@ -415,22 +654,37 @@ def validate_run(run: Mapping[str, Any]) -> Tuple[List[Issue], Dict[str, Any]]:
 
     copy_for_metrics = copy.deepcopy(dict(run))
     expected_metrics = recompute_metrics(copy_for_metrics)
-    actual_metrics = ((run.get("coverage") or {}).get("metrics"))
+    actual_metrics = (run.get("coverage") or {}).get("metrics")
     if actual_metrics != expected_metrics:
-        _issue(issues, "error", "$.coverage.metrics", "Stored metrics do not match deterministic recomputation.")
+        _issue(
+            issues,
+            "error",
+            "$.coverage.metrics",
+            "Stored metrics do not match deterministic recomputation.",
+        )
 
     status = (run.get("run") or {}).get("status")
     if status == "complete":
         untriaged = expected_metrics["relevance_counts"]["untriaged"]
         if untriaged:
-            _issue(issues, "error", "$.run.status", "Complete run contains untriaged candidates.")
+            _issue(
+                issues,
+                "error",
+                "$.run.status",
+                "Complete run contains untriaged candidates.",
+            )
         missing_facets = [
             facet.get("name")
             for facet in (run.get("coverage") or {}).get("facets", []) or []
             if isinstance(facet, Mapping) and facet.get("status") == "missing"
         ]
         if missing_facets:
-            _issue(issues, "warning", "$.coverage.facets", "Complete run still has missing facets.")
+            _issue(
+                issues,
+                "warning",
+                "$.coverage.facets",
+                "Complete run still has missing facets.",
+            )
 
     return issues, expected_metrics
 
@@ -441,7 +695,9 @@ def _resolve_run_path(value: Path) -> Path:
     try:
         resolved.relative_to(REPOSITORY_ROOT)
     except ValueError as exc:
-        raise ValueError(f"Run must stay inside repository root: {REPOSITORY_ROOT}") from exc
+        raise ValueError(
+            f"Run must stay inside repository root: {REPOSITORY_ROOT}"
+        ) from exc
     return resolved
 
 
@@ -460,7 +716,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     if args.json:
-        print(json.dumps([asdict(issue) for issue in issues], ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                [asdict(issue) for issue in issues], ensure_ascii=False, indent=2
+            )
+        )
     else:
         for issue in issues:
             print(f"{issue.severity.upper()}: {issue.path}: {issue.message}")

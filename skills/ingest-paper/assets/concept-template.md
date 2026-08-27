@@ -1,39 +1,21 @@
 ---
+schema_version: "0.2"
 id: "concept:{{concept_slug}}"
 type: concept
-title: "{{canonical_name}}"
+title: "{{concept_title}}"
 aliases: []
-kind: concept
 status: draft
+created_at: "{{iso_timestamp}}"
+updated_at: "{{iso_timestamp}}"
+definition: "{{definition}}"
+relations: {}
 ---
 
-# {{canonical_name}}
+# {{concept_title}}
 
 ## Definition
 
-{{concise_definition}}
+{{definition}}
 
-## Scope
-
-{{scope_and_applicability}}
-
-## Distinguishing Features
-
-- {{distinguishing_feature}}
-
-## Provenance
-
-- **Source paper:** [[papers/{{paper_slug}}]]
-- **Evidence location:** {{evidence_location}}
-
-## Linked Papers
-
-- [[papers/{{paper_slug}}]]
-
-## Related Concepts
-
-- {{related_concept_links_or_none}}
-
-## Notes
-
-{{notes_or_none}}
+This template is reserved for a later concept-normalization workflow. The V1
+`ingest-paper` runtime does not create concept pages directly.

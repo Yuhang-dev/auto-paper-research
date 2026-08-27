@@ -48,7 +48,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--db", type=Path, help="SQLite path; C: is rejected.")
     parser.add_argument(
-        "--model", help="LangChain model string, e.g. openai:gpt-4.1-mini."
+        "--model", help="LangChain model string, e.g. openai:deepseek-v4-flash."
     )
     parser.add_argument("--workspace", help="Cross-thread memory namespace.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -146,7 +146,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     research_run.add_argument(
         "--allow-network",
         action="store_true",
-        help="Authorize the deterministic DeepXiv search executor for this invocation.",
+        help=(
+            "Authorize network-backed search or semantic extraction for this invocation."
+        ),
     )
     _add_format(research_run)
     return parser.parse_args(argv)

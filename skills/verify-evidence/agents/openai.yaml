@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Evidence"
+  short_description: "Check Wiki evidence against cited sources"
+  default_prompt: "Use $verify-evidence to verify this draft Wiki evidence against its source."

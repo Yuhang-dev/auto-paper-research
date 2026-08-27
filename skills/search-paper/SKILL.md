@@ -232,8 +232,9 @@ It must preserve:
 - coverage status and gaps;
 - errors, limitations, and stop reason.
 
-Do not create paper or concept Wiki pages during search. Hand reviewed,
-selected candidates to `ingest-paper`.
+Do not create paper or concept Wiki pages during search. Hand screened and
+selected candidates to `ingest-paper`; the deterministic runtime caps automatic
+selection and records the screening basis.
 
 ### 12. Feed the improvement loop
 

@@ -1,189 +1,174 @@
 ---
 name: ingest-paper
 description: >
-  Ingest academic papers into the LLM research wiki by extracting
-  metadata, research problems, methods, claims, experiments,
-  limitations, and concept links. Use when adding a new paper,
-  updating an existing paper page, or converting a paper into
-  structured wiki knowledge.
+  Convert a selected academic-paper candidate and repository-local PDF into
+  evidence-grounded LLM-Wiki paper, method, benchmark, model, claim, and
+  experiment drafts. Use when ingesting a selected search result, refreshing
+  structured knowledge from a paper, or preparing Wiki evidence for later
+  verification.
 ---
 
 # Ingest Paper
 
 ## Purpose
 
-Convert one academic paper into structured, evidence-grounded
-LLM-Wiki knowledge.
+Convert one paper into linked, provenance-preserving Wiki knowledge. This is an
+extraction workflow, not a free-form summary and not an independent verification.
 
-The goal is not merely to summarize the paper.
-
-The goal is to:
-
-1. create or update the paper page;
-2. connect the paper with existing concepts;
-3. record claims and experimental evidence;
-4. preserve enough provenance for later verification.
+The semantic extractor returns a `PaperIngestDraft`. It must not write Markdown
+directly. Deterministic harness code resolves identities, renders pages, validates
+an isolated shadow Wiki, and publishes source pages transactionally.
 
 ## Required context
 
-Before writing wiki content:
+Before extracting:
 
 1. Read `references/wiki-schema.md`.
 2. Read `references/evidence-policy.md`.
-3. Use `assets/paper-template.md` when creating a new paper page.
-4. Use `assets/concept-template.md` only when a new concept page is necessary.
+3. Read `references/ingest-draft-schema.md`.
+4. Consult the existing Wiki catalog supplied by the harness before proposing a
+   reusable entity.
 
-Treat `references/` and `assets/` paths as relative to this Skill directory.
-Treat `wiki/` paths as relative to the repository root.
+Assets document the target page shapes. The deterministic writer, rather than the
+model, applies them.
+
+## Preconditions
+
+Require:
+
+- one candidate with `review_state: selected-for-ingest`;
+- an explicit repository-relative `local_pdf_path`;
+- candidate identity and discovery provenance;
+- page-aware text extracted from that PDF.
+
+Do not ingest from an abstract alone when the output would contain experimental
+claims. If the source or central evidence is incomplete, use `needs-review` and
+omit unsupported entities.
 
 ## Workflow
 
-### 1. Identify the paper
+### 1. Resolve paper identity
 
-Extract:
+Extract title, authors, year, venue, arXiv ID, DOI, and canonical URLs. Prefer DOI,
+then arXiv ID, then normalized title for duplicate detection. Preserve unknown
+values as `null`; never guess.
 
-- title;
-- authors;
-- year;
-- venue;
-- paper URL or identifier.
+When the paper already exists, return matching identifiers so the deterministic
+compiler reuses its canonical paper ID.
 
-Check whether the paper already exists in the wiki.
+### 2. Extract problem and scope
 
-If it exists, update the existing page instead of creating a duplicate.
+Record the research problem, motivation, assumptions, and empirical scope in your
+own concise wording. Do not copy the abstract as the problem statement. Keep
+generality no broader than the paper's evaluated models, tasks, and settings.
 
-### 2. Understand the research problem
+### 3. Resolve reusable entities
 
-Identify:
+For each method, benchmark, and model:
 
-- problem addressed;
-- motivation;
-- assumptions;
-- scope.
+1. search the supplied catalog by canonical ID, title, and alias;
+2. set `existing_id` when an equivalent typed entity exists;
+3. otherwise provide a stable local key and lowercase kebab-case `proposed_slug`;
+4. attach a page-aware evidence locator.
 
-Do not copy the abstract as the problem statement.
+Do not create two local keys for aliases of the same entity. This V1 path does not
+create concept pages; record a missing concept-normalization need as an open
+question for a later Wiki-link workflow.
 
-### 3. Extract the method
-
-Identify:
-
-- core method;
-- important components;
-- how it differs from prior work.
-
-Before creating a concept page, search the existing wiki for:
-
-- canonical name;
-- aliases;
-- semantically equivalent concepts.
-
-Reuse existing concepts whenever possible.
-
-### 4. Extract claims
+### 4. Extract atomic claims
 
 Separate:
 
 - author claims;
-- experimentally supported claims;
-- interpretation by the current agent.
+- claims supported by a reported experiment;
+- current-agent interpretation.
 
-Do not represent agent inference as an author claim.
-
-Follow `references/evidence-policy.md`.
+Record attribution, evidence type, evidence status, scope, and locator separately.
+Never present agent inference as an author claim. An `experiment-supported` claim
+must be referenced by at least one experiment.
 
 ### 5. Extract experiments
 
-Record important:
+Represent one material result per experiment record. Preserve:
 
-- models;
-- datasets or benchmarks;
-- context lengths;
-- baselines;
-- metrics;
-- experimental settings;
-- quantitative results.
+- method, model, and benchmark local keys;
+- context length;
+- sparsity target, pattern, ratio, or budget when reported;
+- metric name, direction, and unit;
+- result value, baseline, and comparison;
+- PDF page plus table, figure, section, or appendix locator;
+- supported and contradicted claim keys.
 
-Preserve evidence locations whenever practical.
+Do not combine rows from different settings into a synthetic result.
 
 ### 6. Record limitations
 
-Prefer limitations explicitly stated or directly supported by
-the paper.
+Keep author-reported limitations separate from agent analysis. Give inferred
+limitations a supporting locator whenever possible. Missing comparisons are not
+negative results unless the paper actually reports them.
 
-Clearly mark inferred limitations as analysis rather than
-paper claims.
+### 7. Return the structured draft
 
-### 7. Link the wiki
+Return exactly one `PaperIngestDraft` matching
+`references/ingest-draft-schema.md`. The `candidate_id` must match the selected
+candidate. Use only `draft` or `needs-review`; ingestion must never assign
+`verified`.
 
-Add links to:
+### 8. Deterministic publication
 
-- concepts;
-- methods;
-- benchmarks;
-- related papers.
+The harness will:
 
-Do not create duplicate concept pages simply because different
-papers use different terminology.
+1. resolve or allocate canonical IDs;
+2. reuse existing typed entities;
+3. render V0.2 Markdown pages;
+4. stage them in an isolated Wiki copy;
+5. rebuild the graph and reject every schema error;
+6. atomically publish and rebuild generated indexes;
+7. roll back source pages if publication fails.
+8. mark the source candidate `ingested` and record its canonical paper ID only
+   after Wiki publication succeeds.
 
-### 8. Write the paper page
-
-Create or update the page according to:
-
-`assets/paper-template.md`
-
-Set a newly ingested or updated page to `draft` or `needs-review`.
-Do not set it to `verified`; verification belongs to a separate workflow.
-
-Replace or remove every template placeholder before finishing.
-
-Do not invent fields or change the wiki schema unless explicitly
-requested.
+Do not bypass this path with direct file writes.
 
 ## Decision rules
 
-### Existing concept
-
-If an equivalent concept already exists:
-
-- reuse the existing page;
-- add an alias if appropriate.
-
-### New concept
-
-Create a new concept page only when:
-
-- no equivalent concept exists; and
-- the concept is important enough to be reused across papers.
-
 ### Uncertain evidence
 
-If a claim cannot be verified:
+- Use `partial` when only part of the wording or scope is supported.
+- Use `unlocated` when no adequate locator was found.
+- Omit unsupported quantitative experiments.
+- Use `needs-review` when identity, source access, or central evidence remains
+  unresolved.
 
-- retain the uncertainty explicitly;
-- do not fabricate evidence;
-- do not mark it verified.
+### Existing versus new entity
+
+- Reuse only a canonical entity of the expected type.
+- Do not treat a same-named concept as a method automatically.
+- Do not overwrite an existing source page merely to add extraction output.
+- Stable child IDs are derived from paper identity, local key, and content.
+
+### Verification boundary
+
+`located` means the extractor found evidence. It does not mean a second agent or
+human verified the evidence. Only the separate verification workflow may set a
+Wiki page to `verified` or a claim assessment to `supported`, `contested`, or
+`refuted`.
 
 ## Self-check
 
-Before finishing, verify:
-
-- [ ] Required paper metadata is present.
-- [ ] The paper does not duplicate an existing paper ID.
-- [ ] Existing concepts were checked before creating new pages.
-- [ ] Important empirical claims have evidence locations.
-- [ ] Quantitative results preserve their experimental conditions.
-- [ ] Agent inference is not presented as an author claim.
-- [ ] Wiki links point to intended pages.
-- [ ] Aliases do not create duplicate concepts.
-- [ ] No unresolved template placeholders remain.
-- [ ] The output follows `references/wiki-schema.md`.
+- [ ] Candidate ID exactly matches the selected search record.
+- [ ] Metadata is present or explicitly unknown.
+- [ ] Existing typed entities were checked before proposing new ones.
+- [ ] Every reusable entity has an evidence locator.
+- [ ] Every quantitative result preserves its conditions and locator.
+- [ ] Every experiment-supported claim is linked from an experiment.
+- [ ] Agent analysis is not attributed to the paper.
+- [ ] No unsupported result, page number, identifier, or link was invented.
+- [ ] Output follows the structured draft and Wiki V0.2 contracts.
+- [ ] No page is marked `verified`.
 
 ## Output
 
-The result should consist of:
-
-- one created or updated paper page;
-- zero or more necessary concept pages;
-- links to existing wiki entities.
-
-Do not create unrelated wiki pages.
+One validated `PaperIngestDraft`. Publication may create zero or one paper page
+and zero or more method, benchmark, model, claim, and experiment pages. Existing
+entities may be reused. Do not create unrelated pages.

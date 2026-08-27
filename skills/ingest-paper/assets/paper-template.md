@@ -1,95 +1,69 @@
 ---
+schema_version: "0.2"
 id: "paper:{{paper_slug}}"
 type: paper
 title: "{{paper_title}}"
+aliases: []
+status: draft
+facets: []
+created_at: "{{iso_timestamp}}"
+updated_at: "{{iso_timestamp}}"
 authors: []
 year: null
 venue: null
-identifiers:
-  arxiv: null
-  doi: null
-urls:
-  paper: "{{paper_url}}"
-status: draft
+identifiers: {}
+urls: {}
+relations:
+  proposes: []
+  reports: []
 ---
 
 # {{paper_title}}
 
 ## Problem
 
-### Problem addressed
+{{problem}}
 
-{{problem_statement}}
-
-### Motivation
+## Motivation
 
 {{motivation}}
 
-### Assumptions and scope
+## Assumptions and scope
 
 {{assumptions_and_scope}}
 
-## Method
-
-### Overview
+## Method overview
 
 {{method_overview}}
 
-### Components
+## Structured entities
 
-{{method_components}}
+### Methods
 
-### Difference from prior work
+{{method_links}}
 
-{{difference_from_prior_work}}
+### Claims
 
-## Key Claims
+{{claim_links}}
 
-### C1
+### Experiments
 
-- **Statement:** {{claim_statement}}
-- **Attribution:** author
-- **Evidence type:** author-stated
-- **Evidence location:** {{evidence_location}}
-- **Scope:** {{claim_scope}}
-- **Evidence status:** located
-
-## Experiments
-
-### Setup
-
-{{experimental_setup}}
-
-### Results
-
-| ID | Model | Dataset / Benchmark | Setting | Baseline | Metric | Result | Evidence |
-|---|---|---|---|---|---|---|---|
-| E1 | {{model}} | {{dataset_or_benchmark}} | {{setting}} | {{baseline}} | {{metric}} | {{result}} | {{evidence_location}} |
+{{experiment_links}}
 
 ## Limitations
 
-### Reported limitations
+### Reported by the paper
 
 {{reported_limitations}}
 
 ### Agent analysis
 
-{{inferred_limitations_or_none}}
+{{inferred_limitations}}
 
-## Wiki Links
+## Related papers
 
-### Concepts and methods
+{{related_paper_links}}
 
-- {{concept_or_method_links}}
+## Open questions
 
-### Benchmarks
-
-- {{benchmark_links}}
-
-### Related papers
-
-- {{related_paper_links}}
-
-## Open Questions
-
-- {{unresolved_question_or_none}}
+{{open_questions}}

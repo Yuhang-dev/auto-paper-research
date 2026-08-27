@@ -1,8 +1,9 @@
 # Research Harness Architecture
 
-This package orchestrates existing deterministic research components. It does
-not replace the Markdown Wiki, infer scientific evidence, or write Wiki source
-pages.
+This package orchestrates deterministic research components around the Markdown
+Wiki. Semantic extraction is model-assisted, but identity resolution, schema
+validation, publication, rollback, progress measurement, and stopping remain
+program-controlled.
 
 ## Modules
 
@@ -15,10 +16,23 @@ pages.
   metadata, and lazy access to registered supporting resources;
 - `research_models.py`: strict snapshot, gap, decision, action-result, attempt,
   and done-criteria contracts;
+- `ingest_models.py`: strict paper-extraction, evidence-locator, entity, claim,
+  and experiment contracts;
+- `paper_ingest.py`: page-aware PDF extraction, bounded evidence excerpt,
+  Skill-conditioned structured extraction, entity resolution, and V0.2 page
+  compilation;
+- `search_runtime.py`: Skill-conditioned gap query planning, structured candidate
+  screening, deterministic selection, search-run validation, and atomic updates;
+- `paper_sources.py`: bounded acquisition of explicitly selected public arXiv
+  PDFs into the repository D-drive source directory;
+- `evidence_verification.py`: PDF/source prechecks, structured semantic
+  verification, guarded Wiki lifecycle transitions, and assessment verification;
+- `nonconsensus_analysis.py`: condition-aware comparison of verified claims and
+  experiments into independently verifiable assessment pages;
 - `research_evaluation.py`: deterministic Wiki/search inspection, measurable
   gap candidates, progress yield, and completion gates;
-- `research_execution.py`: explicit deterministic action table; V1 binds only
-  `search` to the registered `search-paper` script;
+- `research_execution.py`: explicit capability-aware action table for `search`,
+  `ingest`, `verify`, and `analyze_claims`;
 - `research_control.py`: a read-only V0 control pass and the checkpointed V1
   inspect/decide/execute/observe loop;
 - `tools.py`: LangChain wrappers around Wiki, search-run, DeepXiv, and memory
@@ -36,10 +50,11 @@ loads the instruction body, and inventories files under `references/`,
 when explicitly requested and cannot escape the Skill package root.
 
 This version deliberately has no intelligent Skill router and no generic Skill
-executor. Registration remains discovery-only. The outer controller uses one
-explicit deterministic mapping, `search -> search-paper`, and resolves the
-registered `scripts/deepxiv_search.py` resource before execution. Ingest and
-verification executors remain deferred.
+executor. Registration remains discovery-only. The outer controller uses four
+explicit mappings: `search -> search-paper`, `ingest -> ingest-paper`,
+`verify -> verify-evidence`, and `analyze_claims -> analyze-claims`. Each runtime
+loads only its registered instructions and required references. Models never
+select arbitrary scripts or write Wiki Markdown directly.
 
 ```powershell
 D:\anaconda3\python.exe -B -m research_harness skills list
@@ -51,8 +66,15 @@ D:\anaconda3\python.exe -B -m research_harness skills read search-paper referenc
 
 - The default database is `.harness/research-harness.sqlite3` under this D-drive
   repository. A C-drive path is rejected before SQLite opens it.
-- Wiki tools in this version are read-only for Markdown source pages.
-- DeepXiv execution is denied unless runtime context has `allow_network=True`.
+- Ordinary Wiki query tools are read-only. Ingestion, verification, and
+  assessment creation can write only through a guarded writer that validates an
+  isolated shadow Wiki, atomically publishes source pages, rebuilds indexes, and
+  rolls back on failure.
+- Automatic PDF acquisition is limited to an explicitly selected arXiv
+  candidate, approved HTTPS hosts, a bounded file size, and `sources/papers/`
+  under the repository.
+- DeepXiv and remote semantic extraction are denied unless runtime context has
+  `allow_network=True`.
 - Missing credentials, a missing validated query plan, and unsupported actions
   stop before execution with a structured `precondition_blocked` result.
 - Tool output is bounded before it enters model context.
@@ -98,11 +120,15 @@ inspect -> evaluate -> check_done -> decide -> execute_action
    +---- update per-(gap, action) attempts ----+
 ```
 
-The V1 executor currently supports search only. It produces a
+The V1 executor supports search and conditionally enables ingest, verify, and
+claim analysis when a model-backed or injected semantic pipeline exists. It produces a
 `ResearchActionResult`, increments `research_iterations` and `tool_calls`
 internally, re-inspects source files, measures progress, and loops until a done,
-budget, no-progress, blocked, or unsupported-action route stops it. Tool failure
-and a valid search with no new evidence are recorded as different outcomes.
+budget, blocked, stalled, or unsupported-action route stops it. No-progress is
+tracked per `(gap, action)` pair. Unsupported high-priority gaps are skipped when
+another executable frontier exists; exhausted supported pairs stop as `stalled`,
+while a frontier with no available executor stops as `blocked`. Tool failure and
+a valid negative research result are recorded as different outcomes.
 
 Completion uses Wiki evidence-facet coverage, not search candidate coverage.
 Candidate/evidence state routes missing facets to search, ingest, or verify.
@@ -121,6 +147,11 @@ D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-
 D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-models --thread outer-v1 --allow-network
 ```
 
-The second `run` form requires `DEEPXIV_TOKEN` in the process environment.
-Structured-LLM semantic ranking, query-plan generation, and ingest/verify
-executors remain intentionally deferred.
+The second `run` form requires `DEEPXIV_TOKEN` for provider search and the
+configured model-provider key for query planning, screening, ingest, verification,
+or claim analysis. A selected arXiv paper can receive a bounded local source
+automatically; other sources require an explicit repository-relative
+`local_pdf_path`. Successful publication closes the candidate as `ingested`.
+Verification promotes only source-backed records; `analyze_claims` publishes an
+assessment as `needs-review`, and a separate verification pass must promote it.
+Citation expansion and synthesis executors remain intentionally deferred.

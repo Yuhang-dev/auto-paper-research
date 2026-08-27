@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Literal, Mapping, Optional, Tuple
+from typing import Any, Dict, Literal, Mapping, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -47,6 +47,7 @@ StopReason = Literal[
     "completed",
     "budget_exhausted",
     "blocked",
+    "stalled",
     "human_review_required",
 ]
 TARGET_REQUIRED_ACTIONS = frozenset(
@@ -62,7 +63,20 @@ class SearchYield(StrictModel):
     run_id: str
     round: int = Field(ge=1)
     new_core_papers: int = Field(ge=0)
-    novelty_yield: float = Field(ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_novelty_yield(cls, value: Any) -> Any:
+        if isinstance(value, Mapping) and "novelty_yield" in value:
+            payload = dict(value)
+            legacy = float(payload.pop("novelty_yield"))
+            current = float(payload.get("new_core_papers", 0))
+            if legacy != current:
+                raise ValueError(
+                    "legacy novelty_yield must equal new_core_papers for SearchYield"
+                )
+            return payload
+        return value
 
 
 class CorpusSnapshot(StrictModel):
@@ -331,7 +345,25 @@ class ProgressMeasurement(StrictModel):
     action_attempted: bool
     changed: bool
     deltas: Mapping[str, int]
-    novelty_yield: float = Field(ge=0)
+    progress_score: float = Field(ge=0)
     made_progress: bool
     no_progress_rounds: int = Field(ge=0)
     changed_sources: Tuple[str, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_progress_score(cls, value: Any) -> Any:
+        if isinstance(value, Mapping) and "novelty_yield" in value:
+            payload = dict(value)
+            legacy = payload.pop("novelty_yield")
+            if "progress_score" in payload and payload["progress_score"] != legacy:
+                raise ValueError("progress_score conflicts with legacy novelty_yield")
+            payload["progress_score"] = legacy
+            return payload
+        return value
+
+    @property
+    def novelty_yield(self) -> float:
+        """Backward-compatible accessor; serialized state uses progress_score."""
+
+        return self.progress_score
