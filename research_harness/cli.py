@@ -8,9 +8,9 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage
 
 from tools.wiki.indexer import build_index
@@ -151,6 +151,32 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     _add_format(research_run)
+
+    research_resume = research_commands.add_parser(
+        "resume",
+        help="Resume an existing research thread; replan from source truth by default.",
+    )
+    research_resume.add_argument("research_id")
+    research_resume.add_argument("--criteria", type=Path)
+    research_resume.add_argument("--thread", required=True)
+    research_resume.add_argument(
+        "--mode",
+        choices=("replan", "checkpoint"),
+        default="replan",
+        help=(
+            "replan re-inspects Markdown/YAML truth; checkpoint resumes the exact "
+            "pending LangGraph node."
+        ),
+    )
+    research_resume.add_argument(
+        "--allow-network",
+        action="store_true",
+        help=(
+            "Authorize network actions for replan; exact checkpoint mode requires "
+            "this to match the pending checkpoint."
+        ),
+    )
+    _add_format(research_resume)
     return parser.parse_args(argv)
 
 
@@ -231,7 +257,7 @@ def _doctor(settings: HarnessSettings, output_format: str) -> int:
     }
     with HarnessPersistence(settings) as persistence:
         checkpoint_counts = persistence.checkpoint_counts()
-    packages = {}
+    packages: Dict[str, Optional[str]] = {}
     for name in (
         "langchain",
         "langgraph",
@@ -492,6 +518,28 @@ def _emit_payload(payload: Any, output_format: str) -> None:
         )
 
 
+def _research_state_payload(
+    research_id: str, state: Mapping[str, Any]
+) -> Dict[str, Any]:
+    return {
+        "research_id": research_id,
+        "phase": state.get("phase", ""),
+        "control_passes": state.get("control_passes", 0),
+        "research_iterations": state.get("research_iterations", 0),
+        "snapshot": state.get("snapshot"),
+        "gaps": state.get("gaps", []),
+        "progress": state.get("progress"),
+        "evaluation": state.get("evaluation"),
+        "decision": state.get("decision"),
+        "current_gap": state.get("current_gap"),
+        "action_result": state.get("action_result"),
+        "attempts_by_gap_action": state.get("attempts_by_gap_action", {}),
+        "no_progress_rounds": state.get("no_progress_rounds", 0),
+        "tool_calls": state.get("tool_calls", 0),
+        "stop_reason": state.get("stop_reason", ""),
+    }
+
+
 def _research(settings: HarnessSettings, args: argparse.Namespace) -> int:
     if args.research_command == "inspect":
         snapshot = inspect_research(settings, args.research_id)
@@ -567,26 +615,21 @@ def _research(settings: HarnessSettings, args: argparse.Namespace) -> int:
                 thread_id=args.thread,
                 allow_network=args.allow_network,
             )
-        _emit_payload(
-            {
-                "research_id": args.research_id,
-                "phase": state.get("phase", ""),
-                "control_passes": state.get("control_passes", 0),
-                "research_iterations": state.get("research_iterations", 0),
-                "snapshot": state.get("snapshot"),
-                "gaps": state.get("gaps", []),
-                "progress": state.get("progress"),
-                "evaluation": state.get("evaluation"),
-                "decision": state.get("decision"),
-                "current_gap": state.get("current_gap"),
-                "action_result": state.get("action_result"),
-                "attempts_by_gap_action": state.get("attempts_by_gap_action", {}),
-                "no_progress_rounds": state.get("no_progress_rounds", 0),
-                "tool_calls": state.get("tool_calls", 0),
-                "stop_reason": state.get("stop_reason", ""),
-            },
-            args.format,
-        )
+        _emit_payload(_research_state_payload(args.research_id, state), args.format)
+        return 0
+
+    if args.research_command == "resume":
+        with AutonomousResearchController(
+            settings,
+            research_id=args.research_id,
+            criteria_path=args.criteria,
+        ) as controller:
+            state = controller.resume(
+                thread_id=args.thread,
+                allow_network=args.allow_network,
+                mode=args.mode,
+            )
+        _emit_payload(_research_state_payload(args.research_id, state), args.format)
         return 0
 
     raise RuntimeError(f"Unsupported research command: {args.research_command}")
@@ -608,6 +651,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "research": lambda: _research(settings, args),
         }
         return commands[args.command]()
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        if args.command == "research" and args.research_command in {"run", "resume"}:
+            thread_id = args.thread or f"research:{args.research_id}"
+            print(f"Thread: {thread_id}", file=sys.stderr)
+            print("Checkpoint preserved.", file=sys.stderr)
+            print("Resume with the same --thread.", file=sys.stderr)
+        return 130
     except (
         FileNotFoundError,
         KeyError,

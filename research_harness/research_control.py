@@ -628,6 +628,59 @@ class AutonomousResearchController:
             ),
         )
 
+    def resume(
+        self,
+        *,
+        thread_id: str,
+        allow_network: bool = False,
+        mode: str = "replan",
+    ) -> Dict[str, Any]:
+        """Resume an existing research thread from truth or a pending graph node."""
+
+        if self.graph is None:
+            raise RuntimeError("AutonomousResearchController is not open")
+        if mode not in {"replan", "checkpoint"}:
+            raise ValueError("resume mode must be 'replan' or 'checkpoint'")
+
+        selected = _selected_thread(self.research_id, thread_id)
+        checkpoint = self.get_state(selected)
+        if not checkpoint.values:
+            raise ValueError(
+                f"No autonomous research checkpoint exists for thread {selected!r}"
+            )
+
+        if mode == "replan":
+            # A new graph input starts at bootstrap and re-inspects the external
+            # Markdown/YAML sources while preserving thread counters and history.
+            return self.invoke(
+                thread_id=selected,
+                allow_network=allow_network,
+            )
+
+        if not checkpoint.next:
+            raise ValueError(
+                "The checkpoint has no pending graph node; use --mode replan "
+                "to inspect current source truth and continue"
+            )
+        stored_network = bool(checkpoint.values.get("allow_network"))
+        if stored_network != bool(allow_network):
+            required = "with" if stored_network else "without"
+            raise ValueError(
+                "Exact checkpoint resume must preserve its network authority; "
+                f"resume {required} --allow-network or use --mode replan"
+            )
+
+        recursion_limit = self.criteria.max_research_iterations * 8 + 32
+        return self.graph.invoke(
+            None,
+            _checkpoint_config(
+                AUTONOMOUS_CHECKPOINT_NAMESPACE,
+                self.research_id,
+                selected,
+                recursion_limit=recursion_limit,
+            ),
+        )
+
     def get_state(self, thread_id: Optional[str] = None):
         if self.graph is None:
             raise RuntimeError("AutonomousResearchController is not open")

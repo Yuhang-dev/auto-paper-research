@@ -291,6 +291,34 @@ D:\anaconda3\python.exe -B -m research_harness research run `
   long-context-sparse-models --thread outer-v1 --allow-network
 ```
 
+如果运行中按下 Ctrl+C，CLI 会在 Wiki 批次回滚和 LangGraph 上下文关闭后输出：
+
+```text
+Interrupted.
+Thread: outer-v1
+Checkpoint preserved.
+Resume with the same --thread.
+```
+
+显式恢复命令默认采用 `replan`：保留同一 thread 的计数和历史，但先重新读取 Markdown/YAML
+真源，再从最新 Gap 继续。这是包含外部 source of truth 的研究任务的推荐模式：
+
+```powershell
+D:\anaconda3\python.exe -B -m research_harness research resume `
+  long-context-sparse-models --thread outer-v1 --allow-network
+```
+
+只有需要继续中断时尚未完成的 LangGraph pending node 时，才使用精确 checkpoint 模式：
+
+```powershell
+D:\anaconda3\python.exe -B -m research_harness research resume `
+  long-context-sparse-models --thread outer-v1 --mode checkpoint --allow-network
+```
+
+`checkpoint` 模式内部调用 `graph.invoke(None, config)`；它要求 checkpoint 确实存在 pending
+node，并要求当前 `--allow-network` 与中断时的授权完全一致。已正常结束的 checkpoint 应使用
+`replan`，切换网络授权也应使用 `replan`。
+
 该命令会由 Harness 自己记录动作、工具调用和进展。候选筛选会把最多 3 个 core paper
 变为 `selected-for-ingest`。对选中的 arXiv candidate，在同一次 `--allow-network`
 授权下，Ingest 可以受控下载公共 PDF 到 D 盘仓库：

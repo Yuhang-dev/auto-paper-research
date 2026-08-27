@@ -5,7 +5,7 @@ import io
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -763,6 +763,86 @@ class ResearchEvaluationTests(HarnessTestCase):
         self.assertEqual(2, len(state["action_history"]))
         self.assertEqual("blocked", state["stop_reason"])
 
+    def test_checkpoint_resume_continues_pending_node_without_reinspection(
+        self,
+    ) -> None:
+        snapshot = inspect_research(self.settings, "long-context-sparse-models")
+        inspection_count = 0
+
+        def inspector(settings, research_id):
+            nonlocal inspection_count
+            del settings, research_id
+            inspection_count += 1
+            return snapshot
+
+        class InterruptOnceExecutor:
+            supported_actions = frozenset({"search"})
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def execute(
+                self,
+                *,
+                decision,
+                gap,
+                snapshot,
+                action_id,
+                allow_network,
+            ):
+                del gap, snapshot, allow_network
+                self.calls += 1
+                if self.calls == 1:
+                    raise KeyboardInterrupt("simulated outer-loop interruption")
+                return ResearchActionResult(
+                    action_id=action_id,
+                    action=decision.action,
+                    target_gap_id=decision.target_gap_id,
+                    status="blocked",
+                    outcome="precondition_blocked",
+                    attempted=False,
+                    error_codes=("fixture-stop",),
+                )
+
+        executor = InterruptOnceExecutor()
+        with AutonomousResearchController(
+            self.settings,
+            research_id="long-context-sparse-models",
+            action_executor=executor,
+            inspector=inspector,
+        ) as controller:
+            with self.assertRaisesRegex(
+                KeyboardInterrupt,
+                "simulated outer-loop interruption",
+            ):
+                controller.invoke(
+                    thread_id="checkpoint-resume",
+                    allow_network=True,
+                )
+            pending = controller.get_state("checkpoint-resume")
+            self.assertIn("execute_action", pending.next)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "preserve its network authority",
+            ):
+                controller.resume(
+                    thread_id="checkpoint-resume",
+                    allow_network=False,
+                    mode="checkpoint",
+                )
+
+            resumed = controller.resume(
+                thread_id="checkpoint-resume",
+                allow_network=True,
+                mode="checkpoint",
+            )
+
+        self.assertEqual(1, inspection_count)
+        self.assertEqual(2, executor.calls)
+        self.assertEqual("blocked", resumed["stop_reason"])
+        self.assertEqual("fixture-stop", resumed["action_result"]["error_codes"][0])
+
     def test_action_contract_requires_targets_and_consistent_blocking(self) -> None:
         with self.assertRaisesRegex(ValueError, "must target"):
             ResearchDecision(
@@ -1025,6 +1105,73 @@ class HarnessCliTests(HarnessTestCase):
         self.assertEqual(0, run_exit)
         self.assertEqual("blocked", ran["stop_reason"])
         self.assertEqual("network-disabled", ran["action_result"]["error_codes"][0])
+
+        resume_output = io.StringIO()
+        with redirect_stdout(resume_output):
+            resume_exit = cli_main(
+                [
+                    "--db",
+                    str(self.database_path),
+                    "research",
+                    "resume",
+                    "long-context-sparse-models",
+                    "--thread",
+                    "research-cli-run-test",
+                    "--format",
+                    "json",
+                ]
+            )
+        resumed = json.loads(resume_output.getvalue())
+        self.assertEqual(0, resume_exit)
+        self.assertEqual(2, resumed["control_passes"])
+        self.assertEqual("network-disabled", resumed["action_result"]["error_codes"][0])
+
+    def test_research_cli_interrupt_prints_resume_guidance(self) -> None:
+        initial_output = io.StringIO()
+        with redirect_stdout(initial_output):
+            self.assertEqual(
+                0,
+                cli_main(
+                    [
+                        "--db",
+                        str(self.database_path),
+                        "research",
+                        "run",
+                        "long-context-sparse-models",
+                        "--thread",
+                        "outer-v2",
+                        "--format",
+                        "json",
+                    ]
+                ),
+            )
+
+        error_output = io.StringIO()
+        with mock.patch.object(
+            AutonomousResearchController,
+            "invoke",
+            side_effect=KeyboardInterrupt,
+        ), redirect_stderr(error_output):
+            exit_code = cli_main(
+                [
+                    "--db",
+                    str(self.database_path),
+                    "research",
+                    "run",
+                    "long-context-sparse-models",
+                    "--thread",
+                    "outer-v2",
+                ]
+            )
+
+        self.assertEqual(130, exit_code)
+        self.assertEqual(
+            "Interrupted.\n"
+            "Thread: outer-v2\n"
+            "Checkpoint preserved.\n"
+            "Resume with the same --thread.\n",
+            error_output.getvalue(),
+        )
 
     def test_skills_commands_need_no_model_provider(self) -> None:
         list_output = io.StringIO()

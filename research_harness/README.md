@@ -130,6 +130,14 @@ another executable frontier exists; exhausted supported pairs stop as `stalled`,
 while a frontier with no available executor stops as `blocked`. Tool failure and
 a valid negative research result are recorded as different outcomes.
 
+`research resume` requires an existing thread checkpoint. Its default
+`--mode replan` submits a new graph input on that thread, returns to bootstrap,
+and re-inspects Markdown/YAML truth before deciding. `--mode checkpoint` uses
+`graph.invoke(None, config)` only when the checkpoint has a pending node and the
+current network authorization exactly matches the stored invocation. A caught
+Ctrl+C exits with code 130 after printing the thread and same-thread resume
+guidance.
+
 Completion uses Wiki evidence-facet coverage, not search candidate coverage.
 Candidate/evidence state routes missing facets to search, ingest, or verify.
 Completion also requires evidence counts by context bucket and engineering
@@ -145,6 +153,8 @@ D:\anaconda3\python.exe -B -m research_harness research evaluate long-context-sp
 D:\anaconda3\python.exe -B -m research_harness research step long-context-sparse-models --thread outer-v0
 D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-models --thread outer-v1
 D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-models --thread outer-v1 --allow-network
+D:\anaconda3\python.exe -B -m research_harness research resume long-context-sparse-models --thread outer-v1 --allow-network
+D:\anaconda3\python.exe -B -m research_harness research resume long-context-sparse-models --thread outer-v1 --mode checkpoint --allow-network
 ```
 
 The second `run` form requires `DEEPXIV_TOKEN` for provider search and the

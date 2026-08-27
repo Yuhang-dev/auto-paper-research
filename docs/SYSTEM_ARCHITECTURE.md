@@ -471,6 +471,17 @@ bootstrap
 Snapshot 与新版 schema 混用。无进展次数按 `(gap_id, action)` 记录，而不是全局累计：全部
 可执行对达到上限时是 `stalled`；有 open gap 但没有任何 executor 时是 `blocked`。
 
+中断 V1.1 在不改变图结构的前提下增加两个恢复入口：
+
+- `research resume ... --mode replan`（默认）：向同一 thread 提交新输入，从 bootstrap
+  重新 inspect Markdown/YAML 真源，同时保留历史、计数和 attempt 状态；
+- `research resume ... --mode checkpoint`：仅当 checkpoint 存在 pending node 时执行
+  `graph.invoke(None, config)`，精确继续该节点。
+
+checkpoint 模式要求本次 `--allow-network` 与 pending checkpoint 的授权一致；任何授权切换都
+必须走 replan。Ctrl+C 会从执行器和 Writer 向外传播，最外层 CLI 最终返回 130，并打印 thread、
+checkpoint 保留状态和 same-thread 恢复提示。
+
 ### 6.12 `cli.py`：统一入口
 
 CLI 提供以下命令组：
@@ -481,7 +492,7 @@ CLI 提供以下命令组：
 - `memories`：读取 workspace memory；
 - `tools`：列出 Tool；
 - `skills list/show/read`：检查已注册 Skill；
-- `research inspect/evaluate/step/run`：运行外层研究控制；
+- `research inspect/evaluate/step/run/resume`：运行或恢复外层研究控制；
 - Wiki Engine 则通过 `python -m tools.wiki ...` 单独调用。
 
 ## 7. Wiki Engine 如何实现
@@ -831,9 +842,9 @@ D:\anaconda3\python.exe -B -m unittest discover -s skills\search-paper\scripts\t
 
 | 测试组 | 数量 | 状态 |
 |---|---:|---|
-| Research Harness + Wiki | 77 | 通过 |
+| Research Harness + Wiki | 79 | 通过 |
 | Search Skill scripts | 14 | 通过 |
-| 合计 | 91 | 通过 |
+| 合计 | 93 | 通过 |
 
 新增 search runtime、摄取、验证和 non-consensus 模块通过定向 Mypy、Skill quick
 validation、真实 LongLoRA PDF 的 19 页提取，以及本地
