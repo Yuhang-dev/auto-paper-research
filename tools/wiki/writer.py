@@ -233,7 +233,11 @@ class WikiSourceWriter:
                     "Published Wiki validation failed: " + _format_errors(errors)
                 )
             write_artifacts(index, diagnostics)
-        except Exception:
+        except BaseException:
+            # A page batch is one logical transaction.  KeyboardInterrupt,
+            # SystemExit, and GeneratorExit must restore the same source state
+            # as an ordinary exception before the original interruption is
+            # propagated to the caller.
             for target, previous in reversed(tuple(backups.items())):
                 if previous is None:
                     if target.exists():

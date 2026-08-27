@@ -343,8 +343,10 @@ research question
 
 `ingest-paper` 已迁移到 Wiki V0.2，并通过严格 Pydantic Draft、页级 locator、typed
 entity 复用和 guarded Writer 接入 Outer Loop。模型不能直接写 Markdown；拟写页面先在
-shadow Wiki 重建图并通过零 schema error 校验，再原子发布。发布失败会回滚，重复摄取同一
-Draft 为 no-change。现有 legacy 页面继续兼容读取，V1 默认不会覆盖人工 source page。
+shadow Wiki 重建图并通过零 schema error 校验，再逐页原子发布。普通异常以及可捕获的
+`KeyboardInterrupt` / `SystemExit` 会回滚整个页面批次并继续抛出原异常；操作系统强杀或
+断电不属于该进程内回滚保证。重复摄取同一 Draft 为 no-change。现有 legacy 页面继续兼容
+读取，V1 默认不会覆盖人工 source page。
 
 ## Wiki Engine V0.2
 

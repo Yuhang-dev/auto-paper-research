@@ -573,7 +573,13 @@ V0.2 支持八类实体：
 4. 只要出现一个 `ERROR` diagnostic 就拒绝发布；
 5. 对实际页面使用同目录临时文件和 `os.replace`；
 6. 发布后再次校验并重建 `_generated`；
-7. 任一步失败则恢复之前的精确 bytes，并修复可重建索引。
+7. 普通异常以及可捕获的 `KeyboardInterrupt` / `SystemExit` 会恢复整个批次之前的精确
+   bytes、修复可重建索引，并继续抛出原异常。
+
+这里的“事务发布”是进程内的批次一致性保证：每个单页替换使用 `os.replace`，可捕获异常会
+触发全批次回滚；操作系统强杀、断电或存储故障不能被 Python 异常处理器捕获，因此 V1 不宣称
+具备 journal/WAL 级的硬崩溃多文件原子性。若需要该保证，应引入 manifest + recovery journal
+或目录级版本切换，而不是扩大 `except` 范围。
 
 V1 默认拒绝覆盖已有页面。已有 paper/method/benchmark/model 通过 canonical identity 复用，
 新增 claim/experiment 使用稳定内容指纹生成 ID，因此重复执行为 no-change。
@@ -825,9 +831,9 @@ D:\anaconda3\python.exe -B -m unittest discover -s skills\search-paper\scripts\t
 
 | 测试组 | 数量 | 状态 |
 |---|---:|---|
-| Research Harness + Wiki | 76 | 通过 |
+| Research Harness + Wiki | 77 | 通过 |
 | Search Skill scripts | 14 | 通过 |
-| 合计 | 90 | 通过 |
+| 合计 | 91 | 通过 |
 
 新增 search runtime、摄取、验证和 non-consensus 模块通过定向 Mypy、Skill quick
 validation、真实 LongLoRA PDF 的 19 页提取，以及本地

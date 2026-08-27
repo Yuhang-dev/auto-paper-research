@@ -5,7 +5,9 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import tools.wiki.writer as wiki_writer
 from tools.wiki.indexer import build_index, write_artifacts
 from tools.wiki.parser import parse_page
 from tools.wiki.query import (
@@ -15,6 +17,7 @@ from tools.wiki.query import (
     structured_query,
 )
 from tools.wiki.validator import validate_index
+from tools.wiki.writer import WikiSourceWriter
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -307,6 +310,58 @@ class WikiEngineFailureModeTests(unittest.TestCase):
             self.assertIn(
                 "verified_assessment_flag_required",
                 diagnostic_codes(index, "ERROR"),
+            )
+
+    def test_publish_rolls_back_all_pages_when_keyboard_interrupts_batch(self) -> None:
+        temporary, wiki_root = self.temporary_fixture()
+        with temporary:
+            existing = wiki_root / "methods" / "sparse-window.md"
+            previous_bytes = existing.read_bytes()
+            previous_hash = build_index(wiki_root, META_ROOT).source_hash
+            new_page = wiki_root / "papers" / "interrupt-probe.md"
+
+            modified_method = previous_bytes.decode("utf-8") + "\nInterrupt probe.\n"
+            paper_template = (wiki_root / "papers" / "alpha.md").read_text(
+                encoding="utf-8"
+            )
+            new_paper = (
+                paper_template.replace("paper:alpha", "paper:interrupt-probe")
+                .replace("Alpha Sparse Attention", "Interrupt Probe")
+                .replace("  - Alpha\n", "  - Interrupt Probe Paper\n")
+                .replace("2608.00001", "2608.99999")
+            )
+
+            real_atomic_write = wiki_writer._atomic_write
+            calls = 0
+
+            def interrupt_on_second_write(path: Path, content: str) -> None:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise KeyboardInterrupt("simulated publish interruption")
+                real_atomic_write(path, content)
+
+            writer = WikiSourceWriter(wiki_root, META_ROOT)
+            with patch(
+                "tools.wiki.writer._atomic_write",
+                side_effect=interrupt_on_second_write,
+            ):
+                with self.assertRaisesRegex(
+                    KeyboardInterrupt,
+                    "simulated publish interruption",
+                ):
+                    writer.publish(
+                        {
+                            "methods/sparse-window.md": modified_method,
+                            "papers/interrupt-probe.md": new_paper,
+                        },
+                        allow_overwrite=True,
+                    )
+
+            self.assertEqual(previous_bytes, existing.read_bytes())
+            self.assertFalse(new_page.exists())
+            self.assertEqual(
+                previous_hash, build_index(wiki_root, META_ROOT).source_hash
             )
 
 
