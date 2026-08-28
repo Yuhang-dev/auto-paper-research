@@ -1,9 +1,10 @@
 """Immutable semantic artifacts and a mutable publication manifest.
 
-Semantic artifacts are evaluation records, not operational state.  They are
-written after structured-output validation and before deterministic
-compilation.  Publication paths are linked later through a separate manifest
-so the content-addressed artifact itself never changes.
+Semantic artifacts are evaluation records, not operational state. Validated
+outputs are written before deterministic compilation; rejected structured
+outputs may also be retained with ``schema_valid: false`` for diagnosis and
+LoopEngineer feedback. Publication paths are linked later through a separate
+manifest so the content-addressed artifact itself never changes.
 """
 
 from __future__ import annotations
@@ -180,9 +181,17 @@ class SemanticArtifactRecorder:
         schema_resources: Sequence[str],
         output: Any,
         diagnostic_codes: Iterable[str] = (),
+        schema_valid: bool = True,
+        validation_details: Optional[Mapping[str, Any]] = None,
     ) -> SemanticArtifactRef:
         if not ARTIFACT_KIND_PATTERN.fullmatch(kind):
             raise ValueError("Semantic artifact kind must use lowercase kebab-case")
+        validation: dict[str, Any] = {
+            "schema_valid": schema_valid,
+            "diagnostic_codes": sorted(set(str(code) for code in diagnostic_codes)),
+        }
+        if validation_details is not None:
+            validation["details"] = _redact(validation_details)
         identity = {
             "schema_version": "0.1",
             "action_id": context.action_id,
@@ -196,10 +205,7 @@ class SemanticArtifactRecorder:
             },
             "inputs": context.as_dict(),
             "output": _redact(output),
-            "validation": {
-                "schema_valid": True,
-                "diagnostic_codes": sorted(set(str(code) for code in diagnostic_codes)),
-            },
+            "validation": validation,
         }
         digest = _sha256_bytes(_canonical_json(identity))
         artifact_id = f"semantic-{kind}-{digest[:20]}"

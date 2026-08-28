@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -7,8 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+from langchain_core.exceptions import OutputParserException
 from pydantic import ValidationError
 
+from research_harness.artifacts import (
+    SemanticArtifactContext,
+    SemanticArtifactRecorder,
+)
 from research_harness.config import HarnessSettings, REPOSITORY_ROOT
 from research_harness.ingest_models import (
     IngestCandidate,
@@ -16,8 +22,10 @@ from research_harness.ingest_models import (
     PaperIngestResult,
 )
 from research_harness.paper_ingest import (
+    LangChainPaperDraftExtractor,
     PaperIngestError,
     PaperIngestPipeline,
+    PaperIngestStructuredOutputError,
     extract_pdf_document,
     select_paper_excerpt,
 )
@@ -176,6 +184,26 @@ class StaticExtractor:
         return self.draft
 
 
+class ScriptedStructuredModel:
+    """Minimal chat-model facade that scripts structured-output outcomes."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = []
+
+    def with_structured_output(self, schema, *, method):
+        self.schema = schema
+        self.method = method
+        return self
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
 class PaperIngestPipelineTests(unittest.TestCase):
     def setUp(self) -> None:
         (REPOSITORY_ROOT / "tmp").mkdir(parents=True, exist_ok=True)
@@ -215,6 +243,21 @@ class PaperIngestPipelineTests(unittest.TestCase):
             extractor=extractor,
             now=lambda: datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc),
         )
+
+    def artifact_context(self, action_id: str) -> SemanticArtifactContext:
+        return SemanticArtifactContext(
+            research_id="long-context-sparse-models",
+            action_id=action_id,
+            snapshot_id="snapshot-test",
+            wiki_source_hash="wiki-hash-test",
+            source_ids=(self.candidate.candidate_id,),
+        )
+
+    @staticmethod
+    def invalid_status_output() -> dict:
+        output = paper_draft().model_dump(mode="json")
+        output["paper"]["status"] = "verified"
+        return output
 
     def test_real_pdf_extraction_preserves_page_markers(self) -> None:
         document = extract_pdf_document(LONG_LORA_PDF, REPOSITORY_ROOT)
@@ -315,6 +358,96 @@ class PaperIngestPipelineTests(unittest.TestCase):
             self.pipeline(extractor).ingest(self.candidate)
         after = build_index(self.wiki_root, self.wiki_root / "_meta").source_hash
         self.assertEqual(before, after)
+
+    def test_schema_failure_is_repaired_once_and_preserved_as_artifact(self) -> None:
+        invalid = self.invalid_status_output()
+        model = ScriptedStructuredModel(
+            [
+                OutputParserException(
+                    "structured output validation failed",
+                    llm_output=json.dumps(invalid),
+                ),
+                paper_draft(),
+            ]
+        )
+        recorder = SemanticArtifactRecorder(
+            REPOSITORY_ROOT,
+            self.root / "artifacts-repaired",
+            model_name="fake:structured",
+        )
+        pipeline = PaperIngestPipeline(
+            self.settings,
+            extractor=LangChainPaperDraftExtractor(model),
+            artifact_recorder=recorder,
+            now=lambda: datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc),
+        )
+
+        result = pipeline.ingest(
+            self.candidate,
+            artifact_context=self.artifact_context("action-repair"),
+        )
+
+        self.assertEqual(2, result.model_calls)
+        self.assertTrue(result.schema_repair_applied)
+        self.assertIn("structured-output-schema-repaired", result.diagnostic_codes)
+        self.assertEqual(2, len(result.semantic_artifact_ids))
+        self.assertEqual(2, len(model.calls))
+        manifest = json.loads(recorder.manifest_path.read_text(encoding="utf-8"))
+        records = manifest["artifacts"]
+        invalid_id = next(
+            artifact_id
+            for artifact_id in result.semantic_artifact_ids
+            if records[artifact_id]["kind"] == "paper-ingest-invalid-output"
+        )
+        invalid_path = recorder.artifact_root / records[invalid_id]["path"]
+        invalid_artifact = json.loads(invalid_path.read_text(encoding="utf-8"))
+        self.assertFalse(invalid_artifact["validation"]["schema_valid"])
+        self.assertEqual(
+            ["paper", "status"],
+            invalid_artifact["validation"]["details"]["errors"][0]["loc"],
+        )
+        self.assertEqual([], records[invalid_id]["publications"])
+
+    def test_failed_repair_preserves_both_outputs_without_wiki_mutation(self) -> None:
+        invalid = self.invalid_status_output()
+        parser_error = lambda: OutputParserException(
+            "structured output validation failed",
+            llm_output=json.dumps(invalid),
+        )
+        model = ScriptedStructuredModel([parser_error(), parser_error()])
+        recorder = SemanticArtifactRecorder(
+            REPOSITORY_ROOT,
+            self.root / "artifacts-failed",
+            model_name="fake:structured",
+        )
+        pipeline = PaperIngestPipeline(
+            self.settings,
+            extractor=LangChainPaperDraftExtractor(model),
+            artifact_recorder=recorder,
+        )
+        before = build_index(self.wiki_root, self.wiki_root / "_meta").source_hash
+
+        with self.assertRaises(PaperIngestStructuredOutputError) as caught:
+            pipeline.ingest(
+                self.candidate,
+                artifact_context=self.artifact_context("action-repair-failed"),
+            )
+
+        error = caught.exception
+        self.assertEqual(2, error.model_calls)
+        self.assertEqual(2, len(error.attempts))
+        self.assertEqual(2, len(error.semantic_artifact_ids))
+        self.assertIn("paper.status", str(error))
+        after = build_index(self.wiki_root, self.wiki_root / "_meta").source_hash
+        self.assertEqual(before, after)
+        manifest = json.loads(recorder.manifest_path.read_text(encoding="utf-8"))
+        for artifact_id in error.semantic_artifact_ids:
+            record = manifest["artifacts"][artifact_id]
+            artifact = json.loads(
+                (recorder.artifact_root / record["path"]).read_text(encoding="utf-8")
+            )
+            self.assertFalse(artifact["validation"]["schema_valid"])
+            self.assertEqual([], record["publications"])
 
     def test_writer_rejects_invalid_shadow_page_without_mutation(self) -> None:
         writer = WikiSourceWriter(self.wiki_root, self.wiki_root / "_meta")

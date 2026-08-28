@@ -409,10 +409,11 @@ Gap 路由规则：
 2. 优先使用显式、安全的仓库相对 `local_pdf_path`；
 3. 对缺少本地源的 arXiv handoff，在网络获准后限制 host、大小、PDF header 和 D 盘目标目录获取；
 4. 调用 `PaperIngestPipeline`，不让模型直接写 Markdown；
-5. 将变更页面和实体数写入 `ResearchActionResult`；
-6. Wiki 发布成功后把 candidate 从 `selected-for-ingest` 关闭为 `ingested`，记录
+5. 若 `PaperIngestDraft` 校验失败，仅以原输出做一次有界 schema repair；无效输出、字段级错误和 repair 结果写入非发布 semantic artifact；
+6. 将实际模型调用数、repair 状态、变更页面和实体数写入 `ResearchActionResult`；
+7. Wiki 发布成功后把 candidate 从 `selected-for-ingest` 关闭为 `ingested`，记录
    canonical paper ID、时间、页面和 diagnostics；
-7. 重建 Snapshot，让 Outer Loop 只承认真源中实际出现的增量。
+8. 重建 Snapshot，让 Outer Loop 只承认真源中实际出现的增量。
 
 `verify`：
 

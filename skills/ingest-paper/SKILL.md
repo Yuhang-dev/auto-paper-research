@@ -114,7 +114,24 @@ Return exactly one `PaperIngestDraft` matching
 candidate. Use only `draft` or `needs-review`; ingestion must never assign
 `verified`.
 
-### 8. Deterministic publication
+### 8. Repair one rejected structured output
+
+If the returned JSON is rejected by `PaperIngestDraft` validation, the harness
+may make exactly one repair attempt. During that repair:
+
+- treat the rejected output as the only factual source;
+- change only JSON shape, field types, allowed enum values, duplicate local
+  keys, and broken local references;
+- omit an unsupported optional entity, claim, or experiment instead of creating
+  replacement evidence;
+- keep `candidate_id` unchanged;
+- do not add facts, identifiers, measurements, locators, or page numbers.
+
+If the repaired output is also invalid, stop. The harness must retain both
+invalid outputs and their field-level validation errors as non-published
+semantic artifacts. It must not compile or publish any Wiki page from them.
+
+### 9. Deterministic publication
 
 The harness will:
 
@@ -165,6 +182,7 @@ Wiki page to `verified` or a claim assessment to `supported`, `contested`, or
 - [ ] Agent analysis is not attributed to the paper.
 - [ ] No unsupported result, page number, identifier, or link was invented.
 - [ ] Output follows the structured draft and Wiki V0.2 contracts.
+- [ ] Any schema repair changed structure only and introduced no new evidence.
 - [ ] No page is marked `verified`.
 
 ## Output

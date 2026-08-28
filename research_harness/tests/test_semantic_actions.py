@@ -3,13 +3,18 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
 from research_harness.config import HarnessSettings, REPOSITORY_ROOT
 from research_harness.evidence_verification import EvidenceVerificationResult
-from research_harness.ingest_models import PaperIngestResult
+from research_harness.ingest_models import IngestCandidate, PaperIngestResult
 from research_harness.nonconsensus_analysis import NonConsensusAnalysisResult
+from research_harness.paper_ingest import (
+    PaperIngestStructuredOutputError,
+    StructuredOutputAttempt,
+)
 from research_harness.paper_sources import AcquiredPaperSource
 from research_harness.research_evaluation import inspect_research
 from research_harness.research_execution import DeterministicActionExecutor
@@ -80,6 +85,43 @@ class FakeAcquirer:
             sha256="a" * 64,
             size_bytes=100,
             downloaded=False,
+        )
+
+
+class InvalidStructuredOutputPipeline:
+    requires_network = False
+
+    def ingest(self, candidate, *, preview=False):
+        del candidate, preview
+        raise PaperIngestStructuredOutputError(
+            (
+                StructuredOutputAttempt(
+                    phase="initial",
+                    raw_output='{"paper":{"status":"verified"}}',
+                    parsed_output={"paper": {"status": "verified"}},
+                    validation_errors=(
+                        {
+                            "loc": ["paper", "status"],
+                            "type": "literal_error",
+                            "msg": "Input should be 'draft' or 'needs-review'",
+                        },
+                    ),
+                ),
+                StructuredOutputAttempt(
+                    phase="repair",
+                    raw_output='{"paper":{"status":"verified"}}',
+                    parsed_output={"paper": {"status": "verified"}},
+                    validation_errors=(
+                        {
+                            "loc": ["paper", "status"],
+                            "type": "literal_error",
+                            "msg": "Input should be 'draft' or 'needs-review'",
+                        },
+                    ),
+                ),
+            ),
+            model_calls=2,
+            semantic_artifact_ids=("semantic-paper-ingest-invalid-output-fixture",),
         )
 
 
@@ -204,6 +246,59 @@ class SemanticActionExecutorTests(unittest.TestCase):
         updated = yaml.safe_load(run_path.read_text(encoding="utf-8"))
         self.assertEqual("ingested", updated["candidates"][0]["review_state"])
         self.assertIn("source_acquisition", updated["candidates"][0])
+
+    def test_ingest_schema_failure_reports_fields_artifact_and_model_calls(self) -> None:
+        snapshot = inspect_research(self.settings, "long-context-sparse-models")
+        gap = ResearchGap(
+            id="gap-ingest-invalid-output",
+            key="selected-papers-pending-ingest",
+            type="workflow_gap",
+            question="Ingest selected source?",
+            priority=0.9,
+            reasons=("one selected candidate",),
+            recommended_action="ingest",
+        )
+        decision = ResearchDecision(
+            action="ingest",
+            target_gap_id=gap.id,
+            reason="test invalid structured output",
+            expected_information_gain=0.9,
+        )
+        candidate = IngestCandidate(
+            candidate_id="arxiv:2601.00001",
+            title="Fixture Paper",
+            source="arxiv",
+            source_id="2601.00001",
+            local_pdf_path="sources/papers/fixture.pdf",
+            search_run_path="research/fixture/search-run.yaml",
+        )
+        executor = DeterministicActionExecutor(
+            self.settings,
+            ingest_pipeline=InvalidStructuredOutputPipeline(),
+        )
+
+        with patch.object(
+            executor,
+            "_select_ingest_candidate",
+            return_value=candidate,
+        ):
+            result = executor.execute(
+                decision=decision,
+                gap=gap,
+                snapshot=snapshot,
+                action_id="action-ingest-invalid-output",
+                allow_network=False,
+            )
+
+        self.assertEqual("tool_failure", result.outcome)
+        self.assertEqual(("ingest-structured-output-invalid",), result.error_codes)
+        self.assertEqual(2, result.tool_calls)
+        self.assertIn("paper.status", result.summary)
+        self.assertEqual(
+            ("semantic-paper-ingest-invalid-output-fixture",),
+            result.semantic_artifact_ids,
+        )
+        self.assertEqual(2, result.metrics["structured_output_invalid_attempts"])
 
 
 if __name__ == "__main__":

@@ -617,7 +617,7 @@ max_research_iterations * 8 + 32
 | Action | 可能出现的 metrics |
 |---|---|
 | `search` | `queries_planned`、`queries_selected`、`queries_attempted`、`queries_succeeded`、`queries_failed`、`empty_results`、`new_candidates`、`candidates_triaged`、`candidates_selected_for_ingest`、`candidates_excluded` |
-| `ingest` | `candidates_selected`、`entities_created`、`entities_reused`、`pages_changed`、`candidate_states_updated`、`pdf_pages`、`paper_sources_attempted`、`paper_sources_acquired` |
+| `ingest` | `candidates_selected`、`entities_created`、`entities_reused`、`pages_changed`、`candidate_states_updated`、`pdf_pages`、`paper_sources_attempted`、`paper_sources_acquired`、`ingest_model_calls`、`schema_repair_attempted`、`schema_repair_applied`、`structured_output_invalid_attempts` |
 | `verify` | `verification_targets`、`entities_verified`、`entities_unresolved`、`pages_changed` |
 | `analyze_claims` | `assessments_created`、`pages_changed` |
 
@@ -717,6 +717,7 @@ text/topic/kind/evidence IDs 会得到相同 hash key，并增加 `confirmations
 | ingest excerpt pages | I | `16` | 最少 4；必含前 3 页和最后 2 页，再按关键词选页 |
 | ingest excerpt chars | I | `70000` | 最少 4000 |
 | Wiki catalog prompt chars | I | `24000` | 超出截断 |
+| ingest schema repair attempts | I/F | `1` | 初次结构化输出校验失败后只允许一次；repair prompt 不再携带 PDF，只能依据原输出修结构，仍失败即停止 |
 | verification entity body chars | I | `6000` | 每个实体 prompt 片段 |
 | verification excerpt chars | I | `90000` | PDF 验证 prompt 上限 |
 | verification decisions | F | 最多 `80` | 每个 supplied entity 必须恰好一个 decision |

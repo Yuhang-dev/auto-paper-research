@@ -29,7 +29,10 @@ from .nonconsensus_analysis import (
     NonConsensusAnalysisResult,
     NonConsensusPreconditionError,
 )
-from .paper_ingest import PaperIngestPipeline
+from .paper_ingest import (
+    PaperIngestPipeline,
+    PaperIngestStructuredOutputError,
+)
 from .paper_sources import (
     ArxivPaperSourceAcquirer,
     PaperSourceAcquirer,
@@ -877,6 +880,33 @@ class DeterministicActionExecutor:
                     source_ids=(candidate.candidate_id,),
                 )
             result = pipeline.ingest(candidate, **ingest_kwargs)
+        except PaperIngestStructuredOutputError as exc:
+            return ResearchActionResult(
+                action_id=action_id,
+                action="ingest",
+                target_gap_id=decision.target_gap_id,
+                status="failed",
+                outcome="tool_failure",
+                attempted=True,
+                tool_calls=exc.model_calls + acquisition_calls,
+                changed_sources=tuple(
+                    dict.fromkeys(
+                        value
+                        for value in (promotion_source, acquisition_source)
+                        if value
+                    )
+                ),
+                summary=f"ingest-paper failed schema validation: {_safe_error(exc)}",
+                error_codes=("ingest-structured-output-invalid",),
+                semantic_artifact_ids=exc.semantic_artifact_ids,
+                metrics={
+                    "candidates_selected": 1,
+                    "paper_sources_acquired": int(bool(acquisition_source)),
+                    "ingest_model_calls": exc.model_calls,
+                    "schema_repair_attempted": int(exc.model_calls > 1),
+                    "structured_output_invalid_attempts": len(exc.attempts),
+                },
+            )
         except Exception as exc:
             return ResearchActionResult(
                 action_id=action_id,
@@ -911,7 +941,7 @@ class DeterministicActionExecutor:
                 status="partial",
                 outcome="tool_failure",
                 attempted=True,
-                tool_calls=1 + acquisition_calls,
+                tool_calls=result.model_calls + acquisition_calls,
                 changed_sources=tuple(
                     dict.fromkeys(
                         (
@@ -931,6 +961,8 @@ class DeterministicActionExecutor:
                     "entities_created": len(result.created_entity_ids),
                     "pages_changed": len(wiki_sources),
                     "paper_sources_acquired": int(bool(acquisition_source)),
+                    "ingest_model_calls": result.model_calls,
+                    "schema_repair_applied": int(result.schema_repair_applied),
                 },
             )
         changed_sources = tuple(
@@ -950,7 +982,7 @@ class DeterministicActionExecutor:
             status="success",
             outcome="positive",
             attempted=True,
-            tool_calls=1 + acquisition_calls,
+            tool_calls=result.model_calls + acquisition_calls,
             changed_sources=changed_sources,
             summary=(
                 f"ingest-paper processed {result.candidate_id} into {result.paper_id}: "
@@ -969,6 +1001,8 @@ class DeterministicActionExecutor:
                 "candidate_states_updated": 1,
                 "pdf_pages": result.pdf_pages,
                 "paper_sources_acquired": int(bool(acquisition_source)),
+                "ingest_model_calls": result.model_calls,
+                "schema_repair_applied": int(result.schema_repair_applied),
             },
         )
 

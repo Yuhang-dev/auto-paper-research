@@ -89,6 +89,29 @@ D:\anaconda3\python.exe -B -m research_harness `
 只有前两步的 report、raw result、semantic artifact 和人工抽查正常后，才逐步改为
 `ingest`、`verification`、`analysis`。对应 `max_actions` 至少为 2、3、4。
 
+第三步只摄取一篇论文，并给首次完整 PDF 抽取和一次可能的 schema repair 留出明确
+deadline：
+
+```powershell
+$runId = "ingest-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+D:\anaconda3\python.exe -B -m research_harness `
+  research canary long-context-sparse-models `
+  --run-id $runId `
+  --allow-network `
+  --stop-after ingest `
+  --max-planned-queries 1 `
+  --max-provider-query-calls 1 `
+  --max-new-unique-candidates 5 `
+  --max-papers-ingested 1 `
+  --max-actions 2 `
+  --deadline-seconds 900 `
+  --provider-max-retries 0 `
+  --format json
+```
+
+`900` 秒是 Canary 进程的硬上限，不是期望耗时；schema 首次成功时不会发生第二次
+模型调用。失败报告中的 `semantic_artifact_ids` 可直接定位原始无效输出和字段错误。
+
 ## 硬边界
 
 - `max_provider_query_calls` 统计 `Reader.search` 调用，不宣称限制 SDK 内部 HTTP；
@@ -108,7 +131,7 @@ D:\anaconda3\python.exe -B -m research_harness `
 |---|---|
 | retrieval | provider call/new candidate 上限通过；raw response 可审计；provenance 正确 |
 | screening | 所有输入 candidate 恰好返回一次；无越界 ID；抽查 false promotion |
-| ingest | PDF hash/页码存在；语义制品先于 Wiki 编译；schema 无 ERROR |
+| ingest | PDF hash/页码存在；语义制品先于 Wiki 编译；schema 无 ERROR；若结构化输出失败，报告精确字段路径且无效输出以 `schema_valid: false` 留存；最多一次 repair |
 | verification | source locator、数值和条件 gate 生效；unsupported 不会升 verified |
 | analysis | 不强制 contested；条件不齐时允许 insufficient-evidence；结果仍 needs-review |
 

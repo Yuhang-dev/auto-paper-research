@@ -441,3 +441,5 @@ class PaperIngestResult(IngestModel):
     semantic_artifact_ids: Tuple[str, ...] = ()
     pdf_pages: int = Field(ge=1)
     selected_pages: Tuple[int, ...]
+    model_calls: int = Field(default=1, ge=1)
+    schema_repair_applied: bool = False
