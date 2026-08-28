@@ -99,6 +99,19 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--max-retries", type=int, default=3)
+    parser.add_argument(
+        "--max-provider-query-calls",
+        type=int,
+        help="Hard cap on Reader.search calls made by this invocation.",
+    )
+    parser.add_argument(
+        "--max-new-unique-candidates",
+        type=int,
+        help=(
+            "Hard cap on new unique candidates accepted by this invocation; "
+            "duplicate provenance may still be merged."
+        ),
+    )
     parser.add_argument("--retry-delay", type=float, default=1.0)
     parser.add_argument(
         "--raw-dir",
@@ -187,11 +200,20 @@ def _duplicate_predecessors(
     return duplicates
 
 
-def _search_kwargs(query: Mapping[str, Any], default_source: str) -> Dict[str, Any]:
+def _search_kwargs(
+    query: Mapping[str, Any],
+    default_source: str,
+    *,
+    size_cap: Optional[int] = None,
+) -> Dict[str, Any]:
     filters = query.get("filters") or {}
+    requested_size = int(filters.get("size") or 20)
+    effective_size = (
+        min(requested_size, size_cap) if size_cap is not None else requested_size
+    )
     kwargs: Dict[str, Any] = {
         "query": str(query.get("text") or "").strip(),
-        "size": int(filters.get("size") or 20),
+        "size": effective_size,
         "offset": int(filters.get("offset") or 0),
         "source": str(filters.get("source") or default_source),
         "use_fine_rerank": bool(filters.get("use_fine_rerank", False)),
@@ -214,6 +236,59 @@ def _search_kwargs(query: Mapping[str, Any], default_source: str) -> Dict[str, A
         if value not in (None, "", [], {}):
             kwargs[argument_name] = value
     return kwargs
+
+
+def _merge_candidates_bounded(
+    existing: Sequence[Mapping[str, Any]],
+    incoming: Sequence[Mapping[str, Any]],
+    *,
+    remaining_new_capacity: Optional[int],
+) -> Tuple[List[Dict[str, Any]], int, int]:
+    """Merge provider-ranked candidates while bounding new unique identities.
+
+    Exact-ID and DOI duplicates are always merged so their discovery provenance is
+    retained. New identities are accepted in provider-rank/candidate-id order only
+    while capacity remains.
+    """
+
+    merged = merge_candidates(existing, [])
+    accepted_new = 0
+    skipped_new = 0
+    ordered = sorted(
+        incoming,
+        key=lambda candidate: (
+            int(
+                ((candidate.get("discovered_by") or [{}])[0]).get(
+                    "provider_rank", 2**31 - 1
+                )
+            ),
+            str(candidate.get("candidate_id") or ""),
+        ),
+    )
+    for candidate in ordered:
+        before_ids = {
+            str(item.get("candidate_id"))
+            for item in merged
+            if item.get("candidate_id")
+        }
+        trial = merge_candidates(merged, [candidate])
+        after_ids = {
+            str(item.get("candidate_id"))
+            for item in trial
+            if item.get("candidate_id")
+        }
+        adds_identity = len(after_ids) > len(before_ids)
+        if (
+            adds_identity
+            and remaining_new_capacity is not None
+            and accepted_new >= remaining_new_capacity
+        ):
+            skipped_new += 1
+            continue
+        merged = trial
+        if adds_identity:
+            accepted_new += 1
+    return merged, accepted_new, skipped_new
 
 
 def _safe_payload(value: Any, token: str) -> Any:
@@ -322,9 +397,56 @@ def execute(args: argparse.Namespace) -> int:
         raise ValueError("max-retries must be between 0 and 10")
     if args.retry_delay < 0:
         raise ValueError("retry-delay cannot be negative")
+    requested_provider_calls = getattr(args, "max_provider_query_calls", None)
+    if requested_provider_calls is not None and requested_provider_calls < 1:
+        raise ValueError("max-provider-query-calls must be positive")
+    requested_new_candidates = getattr(args, "max_new_unique_candidates", None)
+    if requested_new_candidates is not None and requested_new_candidates < 0:
+        raise ValueError("max-new-unique-candidates cannot be negative")
 
     run_path = _run_path(args.run)
     run = load_yaml(run_path)
+    budget = (run.get("run") or {}).get("budget", {}) or {}
+    recorded_provider_calls = budget.get("max_provider_query_calls")
+    if recorded_provider_calls is not None and (
+        not isinstance(recorded_provider_calls, int) or recorded_provider_calls < 1
+    ):
+        raise ValueError(
+            "run.budget.max_provider_query_calls must be null or positive"
+        )
+    recorded_new_candidates = budget.get("max_new_unique_candidates")
+    if recorded_new_candidates is not None and (
+        not isinstance(recorded_new_candidates, int) or recorded_new_candidates < 0
+    ):
+        raise ValueError(
+            "run.budget.max_new_unique_candidates must be null or non-negative"
+        )
+    recorded_retries = budget.get("provider_max_retries")
+    if recorded_retries is not None and (
+        not isinstance(recorded_retries, int) or not 0 <= recorded_retries <= 10
+    ):
+        raise ValueError(
+            "run.budget.provider_max_retries must be null or between 0 and 10"
+        )
+    max_provider_calls = (
+        recorded_provider_calls
+        if requested_provider_calls is None
+        else requested_provider_calls
+        if recorded_provider_calls is None
+        else min(requested_provider_calls, recorded_provider_calls)
+    )
+    max_new_candidates = (
+        recorded_new_candidates
+        if requested_new_candidates is None
+        else requested_new_candidates
+        if recorded_new_candidates is None
+        else min(requested_new_candidates, recorded_new_candidates)
+    )
+    effective_retries = (
+        args.max_retries
+        if recorded_retries is None
+        else min(args.max_retries, recorded_retries)
+    )
     provider = (run.get("run") or {}).setdefault("provider", {})
     provider["package_version"] = package_version("deepxiv-sdk")
     default_source = str(provider.get("source") or "arxiv")
@@ -352,7 +474,9 @@ def execute(args: argparse.Namespace) -> int:
             )
     selected = [query for query in selected if str(query.get("id")) not in duplicate_map]
 
-    budget = (run.get("run") or {}).get("budget", {}) or {}
+    if max_provider_calls is not None:
+        selected = selected[:max_provider_calls]
+
     max_queries = budget.get("max_queries")
     if isinstance(max_queries, int):
         planned_count = len(run.get("queries", []) or [])
@@ -360,12 +484,60 @@ def execute(args: argparse.Namespace) -> int:
             raise ValueError(
                 f"Query plan contains {planned_count} records but max_queries is {max_queries}"
             )
+    total_candidate_budget = budget.get("max_candidates")
+    if total_candidate_budget is not None:
+        if not isinstance(total_candidate_budget, int) or total_candidate_budget < 0:
+            raise ValueError("run.budget.max_candidates must be null or non-negative")
+        existing_unique = len(
+            {
+                str(candidate.get("candidate_id"))
+                for candidate in run.get("candidates", []) or []
+                if candidate.get("candidate_id")
+            }
+        )
+        remaining_total_capacity = max(0, total_candidate_budget - existing_unique)
+        max_new_candidates = (
+            remaining_total_capacity
+            if max_new_candidates is None
+            else min(max_new_candidates, remaining_total_capacity)
+        )
 
     if not selected:
+        run["run"].setdefault("budget", {}).update(
+            {
+                "max_provider_query_calls": max_provider_calls,
+                "max_new_unique_candidates": max_new_candidates,
+                "provider_max_retries": effective_retries,
+            }
+        )
+        run["run"]["execution_totals"] = {
+            "provider_query_calls": 0,
+            "new_unique_candidates": 0,
+        }
         run["run"]["updated_at"] = utc_now()
         recompute_metrics(run)
         write_yaml_atomic(run_path, run)
         print("No queries executed after duplicate and budget checks.")
+        return 0
+
+    if max_new_candidates == 0:
+        run["run"].setdefault("budget", {}).update(
+            {
+                "max_provider_query_calls": max_provider_calls,
+                "max_new_unique_candidates": 0,
+                "provider_max_retries": effective_retries,
+            }
+        )
+        run["run"]["execution_totals"] = {
+            "provider_query_calls": 0,
+            "new_unique_candidates": 0,
+        }
+        run["run"]["status"] = "partial"
+        run["run"]["stop_reason"] = "new-candidate-budget-reached"
+        run["run"]["updated_at"] = utc_now()
+        recompute_metrics(run)
+        write_yaml_atomic(run_path, run)
+        print("No queries executed because the new-candidate budget is exhausted.")
         return 0
 
     token = os.getenv("DEEPXIV_TOKEN")
@@ -385,7 +557,7 @@ def execute(args: argparse.Namespace) -> int:
     reader = Reader(
         token=token,
         timeout=args.timeout,
-        max_retries=args.max_retries,
+        max_retries=effective_retries,
         retry_delay=args.retry_delay,
     )
     raw_dir = _raw_directory(args, run_path, run)
@@ -396,13 +568,33 @@ def execute(args: argparse.Namespace) -> int:
 
     failures = 0
     successes = 0
+    provider_calls = 0
+    initial_candidate_ids = {
+        str(candidate.get("candidate_id"))
+        for candidate in run.get("candidates", []) or []
+        if candidate.get("candidate_id")
+    }
+    accepted_new_total = 0
     stop_now = False
     for query in selected:
         query_id = str(query.get("id"))
-        kwargs = _search_kwargs(query, default_source)
+        remaining_capacity = (
+            None
+            if max_new_candidates is None
+            else max(0, max_new_candidates - accepted_new_total)
+        )
+        if remaining_capacity == 0:
+            run["run"]["stop_reason"] = "new-candidate-budget-reached"
+            break
+        kwargs = _search_kwargs(
+            query,
+            default_source,
+            size_cap=remaining_capacity,
+        )
         retrieved_at = utc_now()
         print(f"Executing {query_id}: {kwargs['query']}")
         try:
+            provider_calls += 1
             response = reader.search(**kwargs)
             if not isinstance(response, Mapping):
                 raise ValueError("DeepXiv returned a non-mapping response")
@@ -420,7 +612,16 @@ def execute(args: argparse.Namespace) -> int:
                 candidate.get("candidate_id")
                 for candidate in run.get("candidates", []) or []
             }
-            run["candidates"] = merge_candidates(run.get("candidates", []) or [], normalized)
+            (
+                run["candidates"],
+                accepted_new,
+                skipped_for_budget,
+            ) = _merge_candidates_bounded(
+                run.get("candidates", []) or [],
+                normalized,
+                remaining_new_capacity=remaining_capacity,
+            )
+            accepted_new_total += accepted_new
             link_possible_versions(run["candidates"])
             after_ids = {candidate.get("candidate_id") for candidate in run["candidates"]}
 
@@ -438,6 +639,8 @@ def execute(args: argparse.Namespace) -> int:
                     "retrieved_count": retrieved_count,
                     "retained_count": len(normalized),
                     "new_unique_count": len(after_ids - before_ids),
+                    "effective_size": int(kwargs["size"]),
+                    "budget_skipped_new_count": skipped_for_budget,
                     "raw_result_path": raw_path.relative_to(REPOSITORY_ROOT).as_posix(),
                     "error_id": None,
                 }
@@ -480,6 +683,26 @@ def execute(args: argparse.Namespace) -> int:
         write_yaml_atomic(run_path, run)
         if stop_now:
             break
+
+    final_candidate_ids = {
+        str(candidate.get("candidate_id"))
+        for candidate in run.get("candidates", []) or []
+        if candidate.get("candidate_id")
+    }
+    actual_new_total = len(final_candidate_ids - initial_candidate_ids)
+    if max_new_candidates is not None and actual_new_total > max_new_candidates:
+        raise RuntimeError("new unique candidate hard limit was violated")
+    run["run"].setdefault("budget", {}).update(
+        {
+            "max_provider_query_calls": max_provider_calls,
+            "max_new_unique_candidates": max_new_candidates,
+            "provider_max_retries": effective_retries,
+        }
+    )
+    run["run"]["execution_totals"] = {
+        "provider_query_calls": provider_calls,
+        "new_unique_candidates": actual_new_total,
+    }
 
     if run["run"].get("status") != "blocked-credential":
         remaining_planned = any(

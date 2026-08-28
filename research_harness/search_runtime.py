@@ -8,6 +8,7 @@ validation, and atomic publication.
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -38,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from tools.wiki.indexer import build_index
 
+from .artifacts import SemanticArtifactContext, SemanticArtifactRecorder
 from .config import HarnessSettings
 from .research_models import ResearchGap, ResearchSnapshot
 from .skill_registry import SkillRegistry, SkillSpec
@@ -285,6 +287,7 @@ class SearchPlanResult:
     query_ids: Tuple[str, ...]
     model_calls: int
     warnings: Tuple[str, ...] = ()
+    semantic_artifact_ids: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -295,6 +298,7 @@ class SearchScreeningResult:
     excluded_candidates: int
     model_calls: int
     warnings: Tuple[str, ...] = ()
+    semantic_artifact_ids: Tuple[str, ...] = ()
 
 
 def _utc_now() -> str:
@@ -360,6 +364,7 @@ class SearchRuntime:
         timeout_seconds: int = 120,
         screening_batch_size: int = 12,
         max_selected_candidates: int = 3,
+        artifact_recorder: Optional[SemanticArtifactRecorder] = None,
     ):
         if timeout_seconds < 1:
             raise ValueError("timeout_seconds must be positive")
@@ -374,6 +379,7 @@ class SearchRuntime:
         self.timeout_seconds = timeout_seconds
         self.screening_batch_size = screening_batch_size
         self.max_selected_candidates = max_selected_candidates
+        self.artifact_recorder = artifact_recorder
 
     @staticmethod
     def _default_engine(settings: HarnessSettings) -> SearchSemanticEngine:
@@ -514,7 +520,14 @@ class SearchRuntime:
         *,
         gap: ResearchGap,
         snapshot: ResearchSnapshot,
+        max_queries: Optional[int] = None,
+        max_candidates: Optional[int] = None,
+        artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> SearchPlanResult:
+        if max_queries is not None and max_queries < 1:
+            raise ValueError("max_queries must be positive")
+        if max_candidates is not None and max_candidates < 1:
+            raise ValueError("max_candidates must be positive")
         runs = self._safe_runs(snapshot)
         previous = runs[-1][1] if runs else None
         scope = copy.deepcopy((previous or {}).get("scope") or {})
@@ -554,6 +567,20 @@ class SearchRuntime:
             scope=scope,
             prior_queries=prior_queries[-80:],
         )
+        artifact_ids: list[str] = []
+        if self.artifact_recorder is not None and artifact_context is not None:
+            artifact = self.artifact_recorder.record(
+                kind="search-plan",
+                context=artifact_context,
+                skill=self.skill,
+                schema_resources=(
+                    "references/search-strategy.md",
+                    "references/search-output-schema.md",
+                    "assets/search-run-template.yaml",
+                ),
+                output=draft,
+            )
+            artifact_ids.append(artifact.artifact_id)
         previous_texts = {
             _normalized_query(str(item.get("text") or "")) for item in prior_queries
         }
@@ -572,6 +599,8 @@ class SearchRuntime:
                 )
             seen.add(signature)
             unique_queries.append(query)
+            if max_queries is not None and len(unique_queries) >= max_queries:
+                break
         if not unique_queries:
             raise SearchRuntimeError("Search planner produced only duplicate queries")
 
@@ -629,6 +658,7 @@ class SearchRuntime:
         template["run"]["budget"].update(
             {
                 "max_queries": len(unique_queries),
+                "max_candidates": max_candidates,
                 "max_rounds": max(
                     round_number,
                     int(
@@ -700,11 +730,20 @@ class SearchRuntime:
             f"Round {round_number} planner rationale: {draft.rationale}"
         ]
         warnings = self._publish_new(destination, template)
+        if self.artifact_recorder is not None:
+            self.artifact_recorder.link_publication(
+                artifact_ids,
+                action_id=artifact_context.action_id if artifact_context else "",
+                changed_sources=(
+                    destination.relative_to(self.settings.repository_root).as_posix(),
+                ),
+            )
         return SearchPlanResult(
             run_path=destination,
             query_ids=tuple(query["id"] for query in queries),
             model_calls=1,
             warnings=warnings,
+            semantic_artifact_ids=tuple(artifact_ids),
         )
 
     def _existing_papers(self) -> Tuple[Mapping[str, Any], ...]:
@@ -806,6 +845,7 @@ class SearchRuntime:
         *,
         run_path: Path,
         gap: ResearchGap,
+        artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> SearchScreeningResult:
         root = self.settings.repository_root.resolve()
         path = run_path.resolve()
@@ -825,6 +865,7 @@ class SearchRuntime:
             return SearchScreeningResult(False, 0, 0, 0, 0)
         existing = self._existing_papers()
         screenings: Dict[str, CandidateScreening] = {}
+        artifact_ids: list[str] = []
         model_calls = 0
         for offset in range(0, len(raw_candidates), self.screening_batch_size):
             batch = raw_candidates[offset : offset + self.screening_batch_size]
@@ -847,6 +888,21 @@ class SearchRuntime:
                 )
             if len(returned) != len(result.screenings):
                 raise SearchRuntimeError("Candidate screener returned duplicate IDs")
+            if self.artifact_recorder is not None and artifact_context is not None:
+                artifact = self.artifact_recorder.record(
+                    kind="candidate-screening",
+                    context=artifact_context.with_updates(
+                        search_run_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                        source_ids=tuple(sorted(expected)),
+                    ),
+                    skill=self.skill,
+                    schema_resources=(
+                        "references/search-strategy.md",
+                        "references/search-output-schema.md",
+                    ),
+                    output=result,
+                )
+                artifact_ids.append(artifact.artifact_id)
             screenings.update({item.candidate_id: item for item in result.screenings})
 
         queries = {
@@ -928,6 +984,14 @@ class SearchRuntime:
             )
             run_header["status"] = "needs-review" if remaining else "partial"
         warnings = self._publish_update(path, run)
+        if self.artifact_recorder is not None:
+            self.artifact_recorder.link_publication(
+                artifact_ids,
+                action_id=artifact_context.action_id if artifact_context else "",
+                changed_sources=(
+                    path.relative_to(self.settings.repository_root).as_posix(),
+                ),
+            )
         return SearchScreeningResult(
             changed=True,
             triaged_candidates=len(raw_candidates),
@@ -938,6 +1002,7 @@ class SearchRuntime:
             ),
             model_calls=model_calls,
             warnings=warnings,
+            semantic_artifact_ids=tuple(artifact_ids),
         )
 
 

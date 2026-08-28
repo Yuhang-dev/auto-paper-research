@@ -63,6 +63,10 @@ class SearchYield(StrictModel):
     run_id: str
     round: int = Field(ge=1)
     new_core_papers: int = Field(ge=0)
+    valid_discovery_round: bool = True
+    invalid_reasons: Tuple[str, ...] = ()
+    query_statuses: Dict[str, int] = Field(default_factory=dict)
+    screening_complete: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -195,6 +199,7 @@ class ResearchActionResult(StrictModel):
     changed_sources: Tuple[str, ...] = ()
     summary: str = ""
     error_codes: Tuple[str, ...] = ()
+    semantic_artifact_ids: Tuple[str, ...] = ()
     metrics: Dict[str, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")

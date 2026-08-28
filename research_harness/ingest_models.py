@@ -438,5 +438,6 @@ class PaperIngestResult(IngestModel):
     reused_entity_ids: Tuple[str, ...] = ()
     changed_paths: Tuple[str, ...] = ()
     diagnostic_codes: Tuple[str, ...] = ()
+    semantic_artifact_ids: Tuple[str, ...] = ()
     pdf_pages: int = Field(ge=1)
     selected_pages: Tuple[int, ...]

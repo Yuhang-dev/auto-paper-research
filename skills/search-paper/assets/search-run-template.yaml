@@ -16,6 +16,9 @@ run:
   budget:
     max_queries: 8
     max_candidates: null
+    max_provider_query_calls: null
+    max_new_unique_candidates: null
+    provider_max_retries: null
     max_rounds: 3
   stop_reason: null
 

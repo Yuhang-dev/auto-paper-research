@@ -276,25 +276,87 @@ def inspect_research(
             str(item) for item in scope.get("unresolved_questions", []) if item
         )
 
-        executed_queries = 0
+        query_rounds: Dict[str, int] = {}
+        round_query_statuses: Dict[int, Counter[str]] = defaultdict(Counter)
+        round_retained_counts: Counter[int] = Counter()
         for query in payload.get("queries", []) or []:
             if not isinstance(query, Mapping):
                 continue
             query_id = str(query.get("id") or "unknown")
+            round_number = max(
+                int(query.get("round") or header.get("round") or 1),
+                1,
+            )
+            query_rounds[query_id] = round_number
             raw_execution = query.get("execution")
             execution: Mapping[str, Any] = (
                 raw_execution if isinstance(raw_execution, Mapping) else {}
             )
             status = str(execution.get("status") or "unknown")
             query_statuses[status] += 1
+            round_query_statuses[round_number][status] += 1
+            round_retained_counts[round_number] += max(
+                int(execution.get("retained_count") or 0),
+                0,
+            )
             if status == "planned":
                 planned_query_ids.add(query_id)
             if status in {"blocked-credential", "failed"}:
                 blocked_query_ids.add(query_id)
-            if status in {"succeeded", "empty", "failed"}:
-                executed_queries += 1
 
-        for position, candidate in enumerate(payload.get("candidates", []) or []):
+        run_candidates = [
+            candidate
+            for candidate in payload.get("candidates", []) or []
+            if isinstance(candidate, Mapping)
+        ]
+        round_screening_flags: Dict[int, List[bool]] = defaultdict(list)
+        for candidate in run_candidates:
+            screened = (
+                isinstance(candidate.get("relevance"), Mapping)
+                and (candidate.get("relevance") or {}).get("label")
+                in RELEVANCE_LABELS
+            )
+            discovered_rounds = {
+                query_rounds[str(discovery.get("query_id"))]
+                for discovery in candidate.get("discovered_by", []) or []
+                if isinstance(discovery, Mapping)
+                and str(discovery.get("query_id")) in query_rounds
+            }
+            for round_number in discovered_rounds:
+                round_screening_flags[round_number].append(screened)
+
+        def round_observation(
+            round_number: int,
+        ) -> tuple[bool, tuple[str, ...], Dict[str, int], bool]:
+            statuses = round_query_statuses.get(round_number, Counter())
+            successful_discovery = bool(
+                statuses.get("succeeded") or statuses.get("empty")
+            )
+            terminal_nonfailure = bool(statuses) and all(
+                status in {"succeeded", "empty", "skipped-duplicate"}
+                for status in statuses
+            )
+            screening_flags = round_screening_flags.get(round_number, [])
+            screening_complete = all(screening_flags) and (
+                bool(screening_flags) or round_retained_counts[round_number] == 0
+            )
+            invalid_reasons = []
+            if not successful_discovery:
+                invalid_reasons.append("no-successful-provider-query")
+            if not terminal_nonfailure:
+                invalid_reasons.append("query-round-not-terminal-or-has-failure")
+            if not screening_complete:
+                invalid_reasons.append("candidate-screening-incomplete")
+            if statuses.get("blocked-credential"):
+                invalid_reasons.append("provider-credential-blocked")
+            return (
+                not invalid_reasons,
+                tuple(invalid_reasons),
+                dict(sorted(statuses.items())),
+                screening_complete,
+            )
+
+        for position, candidate in enumerate(run_candidates):
             if not isinstance(candidate, Mapping):
                 continue
             candidate_id = str(candidate.get("candidate_id") or f"@{run_id}:{position}")
@@ -333,25 +395,44 @@ def inspect_research(
             raw_metrics if isinstance(raw_metrics, Mapping) else {}
         )
         raw_yields = metrics.get("new_core_by_round", []) or []
-        if raw_yields:
-            for item in raw_yields:
-                if not isinstance(item, Mapping):
-                    continue
-                round_number = int(item.get("round") or header.get("round") or 1)
-                count = max(int(item.get("count") or 0), 0)
-                search_yields.append(
-                    SearchYield(
-                        run_id=run_id,
-                        round=round_number,
-                        new_core_papers=count,
-                    )
-                )
-        elif executed_queries:
+        yield_counts: Counter[int] = Counter()
+        for item in raw_yields:
+            if not isinstance(item, Mapping):
+                continue
+            round_number = max(
+                int(item.get("round") or header.get("round") or 1),
+                1,
+            )
+            yield_counts[round_number] += max(int(item.get("count") or 0), 0)
+        observed_rounds = {
+            round_number
+            for round_number, statuses in round_query_statuses.items()
+            if any(
+                statuses.get(status)
+                for status in {
+                    "succeeded",
+                    "empty",
+                    "failed",
+                    "blocked-credential",
+                }
+            )
+        }
+        for round_number in sorted(set(yield_counts) | observed_rounds):
+            (
+                valid_discovery_round,
+                invalid_reasons,
+                round_statuses,
+                screening_complete,
+            ) = round_observation(round_number)
             search_yields.append(
                 SearchYield(
                     run_id=run_id,
-                    round=max(int(header.get("round") or 1), 1),
-                    new_core_papers=0,
+                    round=round_number,
+                    new_core_papers=yield_counts[round_number],
+                    valid_discovery_round=valid_discovery_round,
+                    invalid_reasons=invalid_reasons,
+                    query_statuses=round_statuses,
+                    screening_complete=screening_complete,
                 )
             )
 
@@ -1030,12 +1111,16 @@ def check_done(
                 f"engineering metric {metric} experiments {current_count} < {required_count}"
             )
 
-    yields = snapshot.corpus.search_yields
+    yields = tuple(
+        item
+        for item in snapshot.corpus.search_yields
+        if item.valid_discovery_round
+    )
     saturation_passed = False
     saturation_failure = ""
     if len(yields) < criteria.minimum_completed_search_rounds:
         saturation_failure = (
-            f"completed search rounds {len(yields)} "
+            f"valid completed discovery rounds {len(yields)} "
             f"< {criteria.minimum_completed_search_rounds}"
         )
     else:

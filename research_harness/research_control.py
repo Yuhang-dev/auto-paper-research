@@ -693,6 +693,18 @@ class AutonomousResearchController:
             )
         )
 
+    def get_state_history(self, thread_id: Optional[str] = None):
+        if self.graph is None:
+            raise RuntimeError("AutonomousResearchController is not open")
+        selected = _selected_thread(self.research_id, thread_id)
+        return self.graph.get_state_history(
+            _checkpoint_config(
+                AUTONOMOUS_CHECKPOINT_NAMESPACE,
+                self.research_id,
+                selected,
+            )
+        )
+
     def __enter__(self) -> "AutonomousResearchController":
         return self.open()
 

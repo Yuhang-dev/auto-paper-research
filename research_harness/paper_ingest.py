@@ -35,6 +35,7 @@ from tools.wiki.models import Diagnostic, Entity
 from tools.wiki.resolver import normalize_lookup
 from tools.wiki.writer import WikiSourceWriter, render_wiki_page
 
+from .artifacts import SemanticArtifactContext, SemanticArtifactRecorder
 from .config import HarnessSettings
 from .ingest_models import (
     BenchmarkDraft,
@@ -943,6 +944,7 @@ class PaperIngestPipeline:
         *,
         extractor: Optional[PaperDraftExtractor] = None,
         now: Optional[Callable[[], datetime]] = None,
+        artifact_recorder: Optional[SemanticArtifactRecorder] = None,
     ):
         self.settings = settings
         self.registry = SkillRegistry(settings.skills_root)
@@ -954,6 +956,7 @@ class PaperIngestPipeline:
             now=now,
         )
         self.writer = WikiSourceWriter(settings.wiki_root, settings.wiki_meta_root)
+        self.artifact_recorder = artifact_recorder
 
     @staticmethod
     def _default_extractor(settings: HarnessSettings) -> PaperDraftExtractor:
@@ -986,6 +989,7 @@ class PaperIngestPipeline:
         candidate: IngestCandidate,
         *,
         preview: bool = False,
+        artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> PaperIngestResult:
         document = extract_pdf_document(
             self._source_path(candidate),
@@ -1006,6 +1010,24 @@ class PaperIngestPipeline:
             raise PaperIngestError(
                 "Structured extraction candidate_id does not match the selected candidate"
             )
+        artifact_ids: list[str] = []
+        if self.artifact_recorder is not None and artifact_context is not None:
+            artifact = self.artifact_recorder.record(
+                kind="paper-ingest",
+                context=artifact_context.with_updates(
+                    pdf_sha256=document.sha256,
+                    source_ids=(candidate.candidate_id,),
+                ),
+                skill=self.skill,
+                schema_resources=(
+                    "references/wiki-schema.md",
+                    "references/evidence-policy.md",
+                    "references/ingest-draft-schema.md",
+                    "assets/paper-template.md",
+                ),
+                output=draft,
+            )
+            artifact_ids.append(artifact.artifact_id)
         compiled = self.compiler.compile(draft)
         diagnostics: Tuple[Diagnostic, ...]
         changed_paths: Tuple[str, ...]
@@ -1025,6 +1047,12 @@ class PaperIngestPipeline:
             diagnostics = report.diagnostics
             changed_paths = report.changed_paths
             status = "published" if changed_paths else "no-change"
+        if self.artifact_recorder is not None and artifact_context is not None:
+            self.artifact_recorder.link_publication(
+                artifact_ids,
+                action_id=artifact_context.action_id,
+                changed_sources=tuple(f"wiki/{path}" for path in changed_paths),
+            )
         return PaperIngestResult(
             candidate_id=candidate.candidate_id,
             paper_id=compiled.paper_id,
@@ -1033,6 +1061,7 @@ class PaperIngestPipeline:
             reused_entity_ids=compiled.reused_entity_ids,
             changed_paths=changed_paths,
             diagnostic_codes=tuple(dict.fromkeys(item.code for item in diagnostics)),
+            semantic_artifact_ids=tuple(artifact_ids),
             pdf_pages=len(document.pages),
             selected_pages=excerpt.selected_pages,
         )

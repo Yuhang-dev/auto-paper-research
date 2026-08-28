@@ -142,7 +142,11 @@ For this Skill:
 - do not use agentic answers as verified survey evidence;
 - pass credentials only through `DEEPXIV_TOKEN`;
 - preserve exact queries, filters, returned ranks, scores, and identifiers;
-- keep provider metadata separate from current-agent judgment.
+- keep provider metadata separate from current-agent judgment;
+- treat provider-call, new-candidate, result-size, and retry limits as hard
+  execution boundaries;
+- preserve duplicate discovery provenance without admitting a new identity
+  after the candidate limit is reached.
 
 Run broad discovery before adding narrow filters. Change one major constraint
 at a time when diagnosing weak recall.
@@ -303,6 +307,8 @@ Before finishing, verify:
 - [ ] Four to eight purposeful first-pass queries were considered.
 - [ ] A limitation or disconfirming query family was considered.
 - [ ] Every executed query preserves its exact filters and status.
+- [ ] Execution totals do not exceed the configured hard boundaries.
+- [ ] Effective provider sizes and budget-skipped candidates are recorded.
 - [ ] Candidates have stable identifiers whenever available.
 - [ ] Duplicates merge provenance rather than lose it.
 - [ ] Relevance labels include reasons and screening basis.

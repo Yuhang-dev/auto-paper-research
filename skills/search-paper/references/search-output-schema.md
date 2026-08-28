@@ -47,6 +47,36 @@ Allowed run statuses:
 `complete` means the configured candidate-search stop rule was met. It does
 not mean the literature is exhaustive or the evidence is verified.
 
+### Budgets and execution totals
+
+`run.budget` defines hard execution boundaries. Supported fields are:
+
+- `max_queries`: maximum query records considered by the run;
+- `max_candidates`: maximum total candidate records retained in the run;
+- `max_provider_query_calls`: maximum calls to the provider search interface;
+- `max_new_unique_candidates`: maximum new candidate identities admitted by
+  this execution;
+- `provider_max_retries`: retry count per provider query, from 0 through 10;
+- `max_rounds`: maximum planned search rounds.
+
+`null` means that the corresponding boundary is not configured by the search
+record. A bounded Harness execution may supply a stricter value at runtime;
+the effective value must be written back to `run.budget`.
+
+After an execution, `run.execution_totals` records:
+
+- `provider_query_calls`;
+- `new_unique_candidates`.
+
+Neither total may exceed its corresponding configured boundary. Provider call
+count means calls to `deepxiv_sdk.Reader.search`; it does not claim visibility
+into internal HTTP attempts made by the SDK.
+
+Candidate admission is deterministic: queries are processed in run order and
+results in provider-rank order. Exact stable-ID or DOI duplicates may still
+merge discovery provenance after the new-identity limit is reached, but no new
+candidate identity may be admitted.
+
 ## Scope
 
 Record:
@@ -70,6 +100,9 @@ Each query requires:
 - provider filters;
 - execution status;
 - returned and retained counts when executed;
+- `execution.effective_size`, the provider result-size cap actually used;
+- `execution.budget_skipped_new_count`, the number of otherwise admissible new
+  identities skipped by the candidate budget;
 - error reference when failed.
 
 Allowed execution statuses:

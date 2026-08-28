@@ -29,6 +29,7 @@ from tools.wiki.indexer import WikiIndex, build_index
 from tools.wiki.models import Entity, listify
 from tools.wiki.writer import WikiSourceWriter, render_wiki_page
 
+from .artifacts import SemanticArtifactContext, SemanticArtifactRecorder
 from .config import HarnessSettings
 from .research_models import NonConsensusResult, ResearchGap, ResearchSnapshot
 from .skill_registry import SkillRegistry, SkillSpec
@@ -174,6 +175,7 @@ class NonConsensusAnalysisResult:
     changed_paths: Tuple[str, ...]
     diagnostic_codes: Tuple[str, ...]
     model_calls: int
+    semantic_artifact_ids: Tuple[str, ...] = ()
 
 
 def _entity_record(entity: Entity, *, body_chars: int = 4_000) -> Dict[str, Any]:
@@ -234,6 +236,7 @@ class NonConsensusAnalysisPipeline:
         now: Optional[Callable[[], datetime]] = None,
         max_claims: int = 24,
         max_experiments: int = 40,
+        artifact_recorder: Optional[SemanticArtifactRecorder] = None,
     ):
         if max_claims < 1 or max_experiments < 1:
             raise ValueError("analysis limits must be positive")
@@ -245,6 +248,7 @@ class NonConsensusAnalysisPipeline:
         self.max_claims = max_claims
         self.max_experiments = max_experiments
         self.writer = WikiSourceWriter(settings.wiki_root, settings.wiki_meta_root)
+        self.artifact_recorder = artifact_recorder
 
     @staticmethod
     def _default_analyzer(settings: HarnessSettings) -> ClaimSemanticAnalyzer:
@@ -372,8 +376,8 @@ class NonConsensusAnalysisPipeline:
         *,
         gap: ResearchGap,
         snapshot: ResearchSnapshot,
+        artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> NonConsensusAnalysisResult:
-        del snapshot
         index = build_index(self.settings.wiki_root, self.settings.wiki_meta_root)
         claims, experiments = self._verified_inputs(index)
         if not claims or not experiments:
@@ -426,6 +430,18 @@ class NonConsensusAnalysisPipeline:
             raise NonConsensusAnalysisError(
                 f"Assessment ID already exists: {assessment_id}"
             )
+        artifact_ids: list[str] = []
+        if self.artifact_recorder is not None and artifact_context is not None:
+            artifact = self.artifact_recorder.record(
+                kind="nonconsensus-analysis",
+                context=artifact_context.with_updates(
+                    source_ids=tuple((*draft.claim_ids, *draft.evidence_ids)),
+                ),
+                skill=self.skill,
+                schema_resources=("references/comparison-policy.md",),
+                output=draft,
+            )
+            artifact_ids.append(artifact.artifact_id)
         timestamp = self.now().astimezone(timezone.utc).isoformat(timespec="seconds")
         selected_entities = [
             unique[value] for value in (*draft.claim_ids, *draft.evidence_ids)
@@ -514,6 +530,12 @@ independently confirm the comparison before it becomes verified.
             {relative_path: render_wiki_page(metadata, body)},
             allow_overwrite=False,
         )
+        if self.artifact_recorder is not None and artifact_context is not None:
+            self.artifact_recorder.link_publication(
+                artifact_ids,
+                action_id=artifact_context.action_id,
+                changed_sources=tuple(f"wiki/{path}" for path in report.changed_paths),
+            )
         return NonConsensusAnalysisResult(
             assessment_id=assessment_id,
             status="published" if report.changed_paths else "no-change",
@@ -523,6 +545,7 @@ independently confirm the comparison before it becomes verified.
                 dict.fromkeys(item.code for item in report.diagnostics)
             ),
             model_calls=1,
+            semantic_artifact_ids=tuple(artifact_ids),
         )
 
 

@@ -15,6 +15,9 @@
 完整的模块技术栈、系统流程、总体架构和 Harness 内部实现见：
 
 - [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md)
+- [`docs/PARAMETERS_AND_METRICS.md`](docs/PARAMETERS_AND_METRICS.md)：全部可调参数、计算指标、公式与内部限制
+- [`docs/CANARY_AND_EVALUATION.md`](docs/CANARY_AND_EVALUATION.md)：隔离联网测试、硬边界与分阶段验收
+- [`docs/DONE_CRITERIA_ACTIVATION_CHECKLIST.md`](docs/DONE_CRITERIA_ACTIVATION_CHECKLIST.md)：正式 DoneCriteria 激活前审核项
 
 第一轮检索计划见：
 
@@ -223,6 +226,20 @@ DeepXiv SDK 只在获准的非 dry-run 调用中延迟导入；其 tiktoken 编�
 ```powershell
 D:\anaconda3\python.exe -B -m research_harness doctor
 ```
+
+正式全流程前先跑 1-query 隔离 Canary：
+
+```powershell
+D:\anaconda3\python.exe -B -m research_harness `
+  research canary long-context-sparse-models `
+  --run-id retrieval-v1 --allow-network `
+  --stop-after retrieval --max-actions 1 `
+  --max-provider-query-calls 1 `
+  --max-new-unique-candidates 5 `
+  --deadline-seconds 120 --provider-max-retries 0
+```
+
+Canary 只写 `.harness/canary/<run-id>/`，不修改正式 Wiki、Search Run 或主 SQLite。
 
 执行一个可恢复任务：
 

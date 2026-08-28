@@ -6,7 +6,12 @@ import argparse
 import importlib.metadata
 import json
 import os
+import signal
+import subprocess
 import sys
+import tempfile
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
@@ -16,6 +21,7 @@ from langchain_core.messages import AIMessage, AnyMessage, BaseMessage
 from tools.wiki.indexer import build_index
 from tools.wiki.validator import validate_index
 
+from .canary_models import CanaryLimits, CanaryRunReport
 from .config import HarnessSettings
 from .graph import ResearchHarness
 from .memory import list_notes, recall_notes
@@ -27,8 +33,14 @@ from .research_evaluation import (
     evaluate_gaps,
     inspect_research,
     load_done_criteria,
+    resolve_research_directory,
 )
 from .skill_registry import RESOURCE_GROUPS, SkillRegistry, SkillSpec
+from .trajectory import (
+    ensure_annotation_sidecar,
+    export_checkpoint_trajectory,
+    trajectory_directory,
+)
 
 
 def _configure_utf8_stdio() -> None:
@@ -177,6 +189,40 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     _add_format(research_resume)
+
+    research_canary = research_commands.add_parser(
+        "canary",
+        help="Run a hard-bounded online flow in an isolated workspace.",
+    )
+    research_canary.add_argument("research_id")
+    research_canary.add_argument("--run-id")
+    research_canary.add_argument("--source-run", type=Path)
+    research_canary.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="Explicitly authorize the Canary's provider and model calls.",
+    )
+    research_canary.add_argument(
+        "--stop-after",
+        choices=("retrieval", "screening", "ingest", "verification", "analysis"),
+        default="screening",
+    )
+    research_canary.add_argument("--max-planned-queries", type=int, default=1)
+    research_canary.add_argument("--max-provider-query-calls", type=int, default=1)
+    research_canary.add_argument("--max-new-unique-candidates", type=int, default=5)
+    research_canary.add_argument("--max-papers-ingested", type=int, default=1)
+    research_canary.add_argument("--max-actions", type=int, default=3)
+    research_canary.add_argument("--deadline-seconds", type=int, default=300)
+    research_canary.add_argument("--provider-max-retries", type=int, default=0)
+    _add_format(research_canary)
+
+    research_export = research_commands.add_parser(
+        "export-trajectory",
+        help="Derive a JSONL evaluation trajectory from SQLite checkpoints.",
+    )
+    research_export.add_argument("research_id")
+    research_export.add_argument("--thread", required=True)
+    _add_format(research_export)
     return parser.parse_args(argv)
 
 
@@ -540,7 +586,216 @@ def _research_state_payload(
     }
 
 
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    else:
+        kill_process_group = getattr(os, "killpg", None)
+        sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+        if kill_process_group is None:
+            process.kill()
+        else:
+            kill_process_group(process.pid, sigkill)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+def _redact_secret_values(value: str) -> str:
+    result = value
+    for name in ("DEEPXIV_TOKEN", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
+        secret = os.getenv(name, "")
+        if secret:
+            result = result.replace(secret, "[REDACTED]")
+    return result
+
+
+def _run_research_canary(
+    settings: HarnessSettings,
+    args: argparse.Namespace,
+) -> int:
+    if not args.allow_network:
+        raise ValueError(
+            "Online Canary execution requires explicit --allow-network authorization"
+        )
+    resolve_research_directory(settings, args.research_id)
+    if args.stop_after != "retrieval" and not settings.model:
+        raise ValueError(
+            "screening or later Canary stages require HARNESS_MODEL/--model"
+        )
+    limits = CanaryLimits(
+        max_planned_queries=args.max_planned_queries,
+        max_provider_query_calls=args.max_provider_query_calls,
+        max_new_unique_candidates=args.max_new_unique_candidates,
+        max_papers_ingested=args.max_papers_ingested,
+        max_actions=args.max_actions,
+        deadline_seconds=args.deadline_seconds,
+        provider_max_retries=args.provider_max_retries,
+        stop_after=args.stop_after,
+    )
+    run_id = args.run_id or (
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-")
+        + uuid.uuid4().hex[:8]
+    )
+    request_root = settings.repository_root / ".harness" / "canary-requests"
+    request_root.mkdir(parents=True, exist_ok=True)
+    request_path = request_root / f"{uuid.uuid4().hex}.json"
+    request = {
+        "research_id": args.research_id,
+        "run_id": run_id,
+        "limits": limits.model_dump(mode="json"),
+        "source_run": str(args.source_run) if args.source_run else None,
+        "base_database_path": str(settings.database_path),
+        "model": settings.model,
+        "workspace_id": settings.workspace_id,
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        delete=False,
+        dir=str(request_root),
+        prefix=f".{request_path.name}.",
+        suffix=".tmp",
+    ) as handle:
+        json.dump(request, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+        temporary = Path(handle.name)
+    os.replace(temporary, request_path)
+
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "research_harness.canary_worker",
+                "--request",
+                str(request_path),
+            ],
+            cwd=str(settings.repository_root),
+            env=dict(os.environ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creationflags,
+            start_new_session=os.name != "nt",
+        )
+    except BaseException:
+        request_path.unlink(missing_ok=True)
+        raise
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=limits.deadline_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _terminate_process_tree(process)
+        stdout, stderr = process.communicate()
+    except BaseException:
+        _terminate_process_tree(process)
+        raise
+    finally:
+        request_path.unlink(missing_ok=True)
+
+    canary_root = settings.repository_root / ".harness" / "canary" / run_id
+    report_path = canary_root / "report.json"
+    if timed_out and not report_path.is_file():
+        canary_root.mkdir(parents=True, exist_ok=True)
+        report = CanaryRunReport(
+            run_id=run_id,
+            research_id=args.research_id,
+            status="timeout",
+            stage_reached="not-started",
+            stop_after=limits.stop_after,
+            started_at="unknown",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            duration_seconds=float(limits.deadline_seconds),
+            workspace_root=canary_root.relative_to(
+                settings.repository_root
+            ).as_posix(),
+            limits=limits,
+            invariants={"hard_deadline_enforced": True},
+            error_codes=("canary-deadline-exceeded",),
+        )
+        report_path.write_text(
+            json.dumps(
+                report.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    if report_path.is_file():
+        report_payload = json.loads(report_path.read_text(encoding="utf-8-sig"))
+        _emit_payload(report_payload, args.format)
+        return 0 if report_payload.get("status") == "passed" else 1
+    detail = _redact_secret_values((stderr or stdout).strip()[-2000:])
+    raise RuntimeError(
+        "Canary worker stopped without a report"
+        + (f": {detail}" if detail else "")
+    )
+
+
 def _research(settings: HarnessSettings, args: argparse.Namespace) -> int:
+    if args.research_command == "canary":
+        return _run_research_canary(settings, args)
+
+    if args.research_command == "export-trajectory":
+        destination = trajectory_directory(
+            settings.research_root,
+            args.research_id,
+            args.thread,
+        )
+        with AutonomousResearchController(
+            settings,
+            research_id=args.research_id,
+        ) as controller:
+            history = tuple(controller.get_state_history(args.thread))
+            if not history:
+                raise ValueError(
+                    f"No autonomous checkpoint history exists for thread {args.thread!r}"
+                )
+            count = export_checkpoint_trajectory(
+                history,
+                destination=destination / "trajectory.jsonl",
+                research_id=args.research_id,
+                thread_id=args.thread,
+            )
+        ensure_annotation_sidecar(
+            destination / "human-annotations.yaml",
+            research_id=args.research_id,
+            thread_id=args.thread,
+        )
+        _emit_payload(
+            {
+                "research_id": args.research_id,
+                "thread_id": args.thread,
+                "checkpoint_records": count,
+                "trajectory_path": (
+                    destination / "trajectory.jsonl"
+                ).relative_to(settings.repository_root).as_posix(),
+                "annotations_path": (
+                    destination / "human-annotations.yaml"
+                ).relative_to(settings.repository_root).as_posix(),
+                "source_of_truth": "SQLite LangGraph checkpoints",
+            },
+            args.format,
+        )
+        return 0
     if args.research_command == "inspect":
         snapshot = inspect_research(settings, args.research_id)
         _emit_payload(snapshot.model_dump(mode="json"), args.format)

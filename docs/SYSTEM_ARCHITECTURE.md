@@ -778,6 +778,8 @@ search-run 重新计算研究事实，避免 controller state 成为第二份知
 - query ID、thread ID、research ID 和文件路径都有格式/目录约束；
 - Skill resource 和 Tool 文件访问均阻止 `..` 路径穿越；
 - 子进程有 300 秒 timeout；
+- 联网 Canary 另有父进程硬 deadline、provider call、candidate、paper 和 action 上限；
+- Canary 使用隔离 Wiki、Search Run、PDF、SQLite 与 semantic artifact 目录，并校验正式真源 hash 不变；
 - Tool 输出有字符上限并执行 Token 脱敏；
 - 自动论文源获取只允许 selected arXiv、approved HTTPS host、PDF header、大小上限和 D 盘目录；
 - 不支持的动作返回结构化 blocked/unsupported；
@@ -828,6 +830,23 @@ D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-
   --allow-network
 ```
 
+在正式循环前运行分阶段 Canary：
+
+```powershell
+D:\anaconda3\python.exe -B -m research_harness research canary `
+  long-context-sparse-models --run-id retrieval-v1 --allow-network `
+  --stop-after retrieval --max-actions 1 `
+  --max-provider-query-calls 1 --max-new-unique-candidates 5 `
+  --deadline-seconds 120 --provider-max-retries 0
+```
+
+从 SQLite checkpoint 导出评估轨迹：
+
+```powershell
+D:\anaconda3\python.exe -B -m research_harness research export-trajectory `
+  long-context-sparse-models --thread outer-v1
+```
+
 运行回归测试：
 
 ```powershell
@@ -842,9 +861,9 @@ D:\anaconda3\python.exe -B -m unittest discover -s skills\search-paper\scripts\t
 
 | 测试组 | 数量 | 状态 |
 |---|---:|---|
-| Research Harness + Wiki | 79 | 通过 |
-| Search Skill scripts | 14 | 通过 |
-| 合计 | 93 | 通过 |
+| Research Harness + Wiki | 86 | 通过 |
+| Search Skill scripts | 16 | 通过 |
+| 合计 | 102 | 通过 |
 
 新增 search runtime、摄取、验证和 non-consensus 模块通过定向 Mypy、Skill quick
 validation、真实 LongLoRA PDF 的 19 页提取，以及本地
@@ -867,9 +886,9 @@ Q01-Q08 = planned
 
 建议继续保持有限、显式的执行器映射：
 
-1. 用 3–5 篇不同版式论文运行真实 V4 Flash 摄取/验证，收集 extraction 与 verification failure taxonomy；
+1. 先跑 1-query retrieval/screening Canary，再用 3–5 篇不同版式论文运行真实 V4 Flash 摄取/验证；
 2. 增加已有 paper 的保守 merge proposal，而不是直接覆盖人工页面；
-3. 拆分 candidate saturation 与 evidence saturation；
+3. 根据真实 valid discovery rounds 校准 search saturation，并另行定义 evidence saturation；
 4. 接入 backward/forward citation expansion；
 5. 增加 repository ownership、kernel build 和 reproducibility 证据链；
 6. 最后实现综述 Markdown/PPT synthesis、引用审计和报告质量评估。

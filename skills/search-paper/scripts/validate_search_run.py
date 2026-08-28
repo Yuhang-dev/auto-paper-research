@@ -195,6 +195,86 @@ def _validate_run_header(run: Mapping[str, Any], issues: List[Issue]) -> None:
                 "$.queries",
                 "Query count exceeds run.budget.max_queries.",
             )
+        max_candidates = budget.get("max_candidates")
+        if max_candidates is not None and (
+            not isinstance(max_candidates, int) or max_candidates < 0
+        ):
+            _issue(
+                issues,
+                "error",
+                "$.run.budget.max_candidates",
+                "Must be null or a non-negative integer.",
+            )
+        elif (
+            isinstance(max_candidates, int)
+            and isinstance(run.get("candidates"), list)
+            and len(run["candidates"]) > max_candidates
+        ):
+            _issue(
+                issues,
+                "error",
+                "$.candidates",
+                "Candidate count exceeds run.budget.max_candidates.",
+            )
+        for field in ("max_provider_query_calls", "max_new_unique_candidates"):
+            value = budget.get(field)
+            if value is not None and (not isinstance(value, int) or value < 0):
+                _issue(
+                    issues,
+                    "error",
+                    f"$.run.budget.{field}",
+                    "Must be null or a non-negative integer.",
+                )
+        provider_calls = budget.get("max_provider_query_calls")
+        if provider_calls == 0:
+            _issue(
+                issues,
+                "error",
+                "$.run.budget.max_provider_query_calls",
+                "Must be null or a positive integer.",
+            )
+        retries = budget.get("provider_max_retries")
+        if retries is not None and (
+            not isinstance(retries, int) or not 0 <= retries <= 10
+        ):
+            _issue(
+                issues,
+                "error",
+                "$.run.budget.provider_max_retries",
+                "Must be null or an integer from 0 to 10.",
+            )
+
+        totals = header.get("execution_totals")
+        if totals is not None:
+            if not isinstance(totals, Mapping):
+                _issue(
+                    issues,
+                    "error",
+                    "$.run.execution_totals",
+                    "Must be a mapping when present.",
+                )
+            else:
+                for field, limit_field in (
+                    ("provider_query_calls", "max_provider_query_calls"),
+                    ("new_unique_candidates", "max_new_unique_candidates"),
+                ):
+                    value = totals.get(field)
+                    if not isinstance(value, int) or value < 0:
+                        _issue(
+                            issues,
+                            "error",
+                            f"$.run.execution_totals.{field}",
+                            "Must be a non-negative integer.",
+                        )
+                        continue
+                    limit = budget.get(limit_field)
+                    if isinstance(limit, int) and value > limit:
+                        _issue(
+                            issues,
+                            "error",
+                            f"$.run.execution_totals.{field}",
+                            f"Value exceeds run.budget.{limit_field}.",
+                        )
 
 
 def _validate_scope(run: Mapping[str, Any], issues: List[Issue]) -> None:

@@ -112,6 +112,13 @@ class HarnessSettings:
             raise ValueError("max_tool_iterations must be between 1 and 30")
         if not 1000 <= self.tool_output_chars <= 100000:
             raise ValueError("tool_output_chars must be between 1000 and 100000")
+        if self.model and self.model.strip().casefold() not in {
+            "deepseek-v4-flash",
+            "openai:deepseek-v4-flash",
+        }:
+            raise ValueError(
+                "This project permits only the DeepSeek deepseek-v4-flash model"
+            )
         if not self.wiki_root.is_dir():
             raise FileNotFoundError(f"Wiki root does not exist: {self.wiki_root}")
         if not self.wiki_meta_root.is_dir():

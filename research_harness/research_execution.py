@@ -15,6 +15,8 @@ from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
+from .artifacts import SemanticArtifactContext, SemanticArtifactRecorder
+from .canary_models import SearchExecutionLimits
 from .config import HarnessSettings
 from .evidence_verification import (
     EvidenceVerificationPipeline,
@@ -59,6 +61,7 @@ class IngestPipeline(Protocol):
         candidate: IngestCandidate,
         *,
         preview: bool = False,
+        artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> PaperIngestResult: ...
 
 
@@ -71,6 +74,7 @@ class VerificationPipeline(Protocol):
         *,
         gap: ResearchGap,
         snapshot: ResearchSnapshot,
+        artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> EvidenceVerificationResult: ...
 
 
@@ -83,6 +87,7 @@ class ClaimAnalysisPipeline(Protocol):
         *,
         gap: ResearchGap,
         snapshot: ResearchSnapshot,
+        artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> NonConsensusAnalysisResult: ...
 
 
@@ -189,6 +194,8 @@ class DeterministicActionExecutor:
         paper_source_acquirer: Optional[PaperSourceAcquirer] = None,
         verification_pipeline: Optional[VerificationPipeline] = None,
         claim_analysis_pipeline: Optional[ClaimAnalysisPipeline] = None,
+        search_limits: Optional[SearchExecutionLimits] = None,
+        artifact_recorder: Optional[SemanticArtifactRecorder] = None,
     ):
         if timeout_seconds < 1:
             raise ValueError("timeout_seconds must be positive")
@@ -199,6 +206,8 @@ class DeterministicActionExecutor:
         self._search_runtime = search_runtime
         self._verification_pipeline = verification_pipeline
         self._claim_analysis_pipeline = claim_analysis_pipeline
+        self.search_limits = search_limits
+        self.artifact_recorder = artifact_recorder
         self._paper_source_acquirer = paper_source_acquirer or ArxivPaperSourceAcquirer(
             settings.repository_root,
             timeout_seconds=min(timeout_seconds, 120),
@@ -487,7 +496,10 @@ class DeterministicActionExecutor:
     def _pipeline(self) -> IngestPipeline:
         pipeline = self._ingest_pipeline
         if pipeline is None:
-            pipeline = PaperIngestPipeline(self.settings)
+            pipeline = PaperIngestPipeline(
+                self.settings,
+                artifact_recorder=self.artifact_recorder,
+            )
             self._ingest_pipeline = pipeline
         return pipeline
 
@@ -497,6 +509,7 @@ class DeterministicActionExecutor:
             runtime = SearchRuntime(
                 self.settings,
                 timeout_seconds=min(self.timeout_seconds, 180),
+                artifact_recorder=self.artifact_recorder,
             )
             self._search_runtime = runtime
         return runtime
@@ -504,7 +517,10 @@ class DeterministicActionExecutor:
     def _verification(self) -> VerificationPipeline:
         pipeline = self._verification_pipeline
         if pipeline is None:
-            pipeline = EvidenceVerificationPipeline(self.settings)
+            pipeline = EvidenceVerificationPipeline(
+                self.settings,
+                artifact_recorder=self.artifact_recorder,
+            )
             self._verification_pipeline = pipeline
         return pipeline
 
@@ -545,7 +561,20 @@ class DeterministicActionExecutor:
                 error_codes=("verification-network-disabled",),
             )
         try:
-            result = pipeline.verify_next(gap=gap, snapshot=snapshot)
+            verify_kwargs: Dict[str, Any] = {}
+            if self.artifact_recorder is not None:
+                verify_kwargs["artifact_context"] = SemanticArtifactContext(
+                    research_id=snapshot.research_id,
+                    action_id=action_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    wiki_source_hash=snapshot.wiki_source_hash,
+                    source_ids=(gap.id,),
+                )
+            result = pipeline.verify_next(
+                gap=gap,
+                snapshot=snapshot,
+                **verify_kwargs,
+            )
         except VerificationPreconditionError as exc:
             return ResearchActionResult(
                 action_id=action_id,
@@ -586,6 +615,7 @@ class DeterministicActionExecutor:
                 f"{len(result.unresolved_entity_ids)} retained for review."
             ),
             error_codes=(),
+            semantic_artifact_ids=result.semantic_artifact_ids,
             metrics={
                 "verification_targets": 1,
                 "entities_verified": len(result.verified_entity_ids),
@@ -597,7 +627,10 @@ class DeterministicActionExecutor:
     def _claim_analysis(self) -> ClaimAnalysisPipeline:
         pipeline = self._claim_analysis_pipeline
         if pipeline is None:
-            pipeline = NonConsensusAnalysisPipeline(self.settings)
+            pipeline = NonConsensusAnalysisPipeline(
+                self.settings,
+                artifact_recorder=self.artifact_recorder,
+            )
             self._claim_analysis_pipeline = pipeline
         return pipeline
 
@@ -638,7 +671,20 @@ class DeterministicActionExecutor:
                 error_codes=("claim-analysis-network-disabled",),
             )
         try:
-            result = pipeline.analyze(gap=gap, snapshot=snapshot)
+            analyze_kwargs: Dict[str, Any] = {}
+            if self.artifact_recorder is not None:
+                analyze_kwargs["artifact_context"] = SemanticArtifactContext(
+                    research_id=snapshot.research_id,
+                    action_id=action_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    wiki_source_hash=snapshot.wiki_source_hash,
+                    source_ids=(gap.id,),
+                )
+            result = pipeline.analyze(
+                gap=gap,
+                snapshot=snapshot,
+                **analyze_kwargs,
+            )
         except NonConsensusPreconditionError as exc:
             return ResearchActionResult(
                 action_id=action_id,
@@ -677,6 +723,7 @@ class DeterministicActionExecutor:
                 f"{result.result}; it remains needs-review pending independent verification."
             ),
             error_codes=(),
+            semantic_artifact_ids=result.semantic_artifact_ids,
             metrics={
                 "assessments_created": 1,
                 "pages_changed": len(result.changed_paths),
@@ -817,7 +864,19 @@ class DeterministicActionExecutor:
                     metrics={"paper_sources_acquired": int(bool(acquisition_source))},
                 )
         try:
-            result = pipeline.ingest(candidate)
+            ingest_kwargs: Dict[str, Any] = {}
+            if self.artifact_recorder is not None:
+                ingest_kwargs["artifact_context"] = SemanticArtifactContext(
+                    research_id=snapshot.research_id,
+                    action_id=action_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    wiki_source_hash=snapshot.wiki_source_hash,
+                    search_run_sha256=_content_hash(
+                        self.settings.repository_root / candidate.search_run_path
+                    ),
+                    source_ids=(candidate.candidate_id,),
+                )
+            result = pipeline.ingest(candidate, **ingest_kwargs)
         except Exception as exc:
             return ResearchActionResult(
                 action_id=action_id,
@@ -901,6 +960,7 @@ class DeterministicActionExecutor:
                 "handoff was closed."
             ),
             error_codes=(),
+            semantic_artifact_ids=result.semantic_artifact_ids,
             metrics={
                 "candidates_selected": 1,
                 "entities_created": len(result.created_entity_ids),
@@ -953,6 +1013,8 @@ class DeterministicActionExecutor:
                 in ELIGIBLE_SEARCH_STATUSES
             )
             if eligible:
+                if self.search_limits is not None:
+                    eligible = eligible[: self.search_limits.max_planned_queries]
                 return path, eligible
         return None, ()
 
@@ -1006,6 +1068,7 @@ class DeterministicActionExecutor:
             )
 
         planning_model_calls = 0
+        semantic_artifact_ids: list[str] = []
         planned_source: Optional[str] = None
         planning_warnings: Tuple[str, ...] = ()
         if needs_plan:
@@ -1018,7 +1081,25 @@ class DeterministicActionExecutor:
                     summary="Semantic query planning requires explicit network authorization.",
                 )
             try:
-                planned = runtime.plan_run(gap=gap, snapshot=snapshot)
+                artifact_context = SemanticArtifactContext(
+                    research_id=snapshot.research_id,
+                    action_id=action_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    wiki_source_hash=snapshot.wiki_source_hash,
+                )
+                plan_kwargs: Dict[str, Any] = {}
+                if self.search_limits is not None:
+                    plan_kwargs = {
+                        "max_queries": self.search_limits.max_planned_queries,
+                        "max_candidates": self.search_limits.max_new_unique_candidates,
+                    }
+                if self.artifact_recorder is not None:
+                    plan_kwargs["artifact_context"] = artifact_context
+                planned = runtime.plan_run(
+                    gap=gap,
+                    snapshot=snapshot,
+                    **plan_kwargs,
+                )
             except Exception as exc:
                 return ResearchActionResult(
                     action_id=action_id,
@@ -1036,6 +1117,9 @@ class DeterministicActionExecutor:
             query_ids = planned.query_ids
             planning_model_calls = planned.model_calls
             planning_warnings = planned.warnings
+            semantic_artifact_ids.extend(
+                getattr(planned, "semantic_artifact_ids", ())
+            )
             planned_source = _relative_path(self.settings, run_path)
 
         assert run_path is not None and query_ids
@@ -1059,6 +1143,14 @@ class DeterministicActionExecutor:
 
         before = _load_yaml(run_path)
         before_hash = _content_hash(run_path)
+        search_artifact_context = SemanticArtifactContext(
+            research_id=snapshot.research_id,
+            action_id=action_id,
+            snapshot_id=snapshot.snapshot_id,
+            wiki_source_hash=snapshot.wiki_source_hash,
+            search_run_sha256=before_hash,
+            source_ids=tuple(query_ids),
+        )
         before_queries = _query_map(before)
         before_candidates = _candidate_ids(before)
         before_raw_paths = {
@@ -1081,6 +1173,17 @@ class DeterministicActionExecutor:
                     summary=f"Search-run contains an unsafe query ID: {query_id!r}.",
                 )
             command.extend(["--query-id", query_id])
+        if self.search_limits is not None:
+            command.extend(
+                [
+                    "--max-provider-query-calls",
+                    str(self.search_limits.max_provider_query_calls),
+                    "--max-new-unique-candidates",
+                    str(self.search_limits.max_new_unique_candidates),
+                    "--max-retries",
+                    str(self.search_limits.provider_max_retries),
+                ]
+            )
 
         child_environment = dict(os.environ)
         child_environment["PYTHONUTF8"] = "1"
@@ -1124,7 +1227,7 @@ class DeterministicActionExecutor:
             )
             for query_id in query_ids
         }
-        provider_calls = 0
+        inferred_provider_calls = 0
         for query_id in query_ids:
             before_execution = before_queries.get(query_id, {}).get("execution") or {}
             after_execution = after_queries.get(query_id, {}).get("execution") or {}
@@ -1134,7 +1237,22 @@ class DeterministicActionExecutor:
                 != before_execution.get("executed_at")
                 and query_statuses[query_id] in EXECUTED_SEARCH_STATUSES
             ):
-                provider_calls += 1
+                inferred_provider_calls += 1
+        raw_header = after.get("run")
+        header = raw_header if isinstance(raw_header, Mapping) else {}
+        raw_execution_totals = header.get("execution_totals")
+        execution_totals = (
+            raw_execution_totals
+            if isinstance(raw_execution_totals, Mapping)
+            else {}
+        )
+        recorded_provider_calls = execution_totals.get("provider_query_calls")
+        provider_calls = (
+            recorded_provider_calls
+            if isinstance(recorded_provider_calls, int)
+            and recorded_provider_calls >= 0
+            else inferred_provider_calls
+        )
         succeeded = sum(
             status in {"succeeded", "empty"} for status in query_statuses.values()
         )
@@ -1148,14 +1266,28 @@ class DeterministicActionExecutor:
         excluded_candidates = 0
         screening_warnings: Tuple[str, ...] = ()
         screening_error: Optional[str] = None
-        if runtime is not None and completed.returncode == 0:
+        screening_enabled = not (
+            self.search_limits is not None
+            and self.search_limits.stop_after == "retrieval"
+        )
+        if runtime is not None and completed.returncode == 0 and screening_enabled:
             try:
-                screened = runtime.screen_run(run_path=run_path, gap=gap)
+                screen_kwargs: Dict[str, Any] = {}
+                if self.artifact_recorder is not None:
+                    screen_kwargs["artifact_context"] = search_artifact_context
+                screened = runtime.screen_run(
+                    run_path=run_path,
+                    gap=gap,
+                    **screen_kwargs,
+                )
                 screening_calls = screened.model_calls
                 triaged_candidates = screened.triaged_candidates
                 selected_candidates = screened.selected_candidates
                 excluded_candidates = screened.excluded_candidates
                 screening_warnings = screened.warnings
+                semantic_artifact_ids.extend(
+                    getattr(screened, "semantic_artifact_ids", ())
+                )
                 if screened.changed:
                     after = _load_yaml(run_path)
                     after_queries = _query_map(after)
@@ -1185,6 +1317,7 @@ class DeterministicActionExecutor:
             "candidates_triaged": triaged_candidates,
             "candidates_selected_for_ingest": selected_candidates,
             "candidates_excluded": excluded_candidates,
+            "screening_skipped": int(not screening_enabled),
         }
         attempted = True
         if completed.returncode == 0 and screening_error is None:
@@ -1228,5 +1361,6 @@ class DeterministicActionExecutor:
             changed_sources=tuple(dict.fromkeys(changed_sources)),
             summary=summary,
             error_codes=tuple(error_codes),
+            semantic_artifact_ids=tuple(dict.fromkeys(semantic_artifact_ids)),
             metrics=metrics,
         )

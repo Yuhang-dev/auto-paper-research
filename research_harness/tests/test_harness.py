@@ -93,6 +93,17 @@ class ConfigurationAndPersistenceTests(HarnessTestCase):
         with self.assertRaisesRegex(ValueError, "cannot be on C"):
             resolve_database_path(r"C:\research\memory.sqlite3")
 
+    def test_configured_remote_model_is_restricted_to_v4_flash(self) -> None:
+        with self.assertRaisesRegex(ValueError, "deepseek-v4-flash"):
+            replace(self.settings, model="openai:another-model").validate()
+        with self.assertRaisesRegex(ValueError, "deepseek-v4-flash"):
+            replace(
+                self.settings, model="openai:deepseek-v4-flash-experimental"
+            ).validate()
+        replace(
+            self.settings, model="openai:deepseek-v4-flash"
+        ).validate()
+
     def test_sqlite_checkpoint_and_store_share_one_file(self) -> None:
         with HarnessPersistence(self.settings) as persistence:
             self.assertIsNotNone(persistence.checkpointer)
@@ -347,6 +358,100 @@ class ResearchEvaluationTests(HarnessTestCase):
         self.assertTrue(active_check.complete)
         self.assertEqual("completed", active_check.stop_reason)
         self.assertEqual("finish", decide_next_action((), active_check).action)
+
+    def test_invalid_search_round_does_not_satisfy_saturation(self) -> None:
+        snapshot = inspect_research(self.settings, "long-context-sparse-models")
+        invalid_corpus = snapshot.corpus.model_copy(
+            update={
+                "search_yields": (
+                    SearchYield(
+                        run_id="failed-provider-round",
+                        round=1,
+                        new_core_papers=0,
+                        valid_discovery_round=False,
+                        invalid_reasons=("query-round-not-terminal-or-has-failure",),
+                        query_statuses={"failed": 1},
+                        screening_complete=True,
+                    ),
+                )
+            }
+        )
+        criteria = DoneCriteria(
+            status="active",
+            facet_requirements={},
+            minimum_method_families=0,
+            minimum_core_candidates=0,
+            minimum_ingested_papers=0,
+            minimum_verified_papers=0,
+            minimum_experiments=0,
+            minimum_verified_claims=0,
+            minimum_evidence_locator_ratio=0,
+            require_nonconsensus_review=False,
+            context_bucket_requirements={},
+            engineering_metric_requirements={},
+            minimum_completed_search_rounds=1,
+            saturation_window=1,
+        )
+        staged = snapshot.model_copy(update={"corpus": invalid_corpus})
+        evaluation = check_done(staged, criteria, (), research_iteration=1)
+        self.assertFalse(evaluation.saturation_passed)
+        self.assertIn("valid completed discovery rounds 0", "\n".join(evaluation.failures))
+
+    def test_search_round_validity_is_computed_per_round(self) -> None:
+        research_root = Path(self.temporary.name) / "research"
+        search_root = research_root / "round-validity" / "search-runs"
+        search_root.mkdir(parents=True)
+        payload = {
+            "schema_version": "0.1",
+            "run": {"id": "two-rounds", "status": "partial", "round": 2},
+            "scope": {"required_facets": []},
+            "queries": [
+                {
+                    "id": "Q01",
+                    "round": 1,
+                    "execution": {
+                        "status": "succeeded",
+                        "retained_count": 1,
+                    },
+                },
+                {
+                    "id": "Q02",
+                    "round": 2,
+                    "execution": {"status": "failed", "retained_count": 0},
+                },
+            ],
+            "candidates": [
+                {
+                    "candidate_id": "arxiv:fake",
+                    "discovered_by": [{"query_id": "Q01"}],
+                    "relevance": {"label": "core"},
+                    "review_state": "abstract-screened",
+                }
+            ],
+            "coverage": {
+                "metrics": {
+                    "new_core_by_round": [
+                        {"round": 1, "count": 1},
+                        {"round": 2, "count": 0},
+                    ]
+                }
+            },
+        }
+        (search_root / "two-rounds.yaml").write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+        settings = replace(self.settings, research_root=research_root)
+        settings.validate()
+        snapshot = inspect_research(settings, "round-validity")
+        yields = {item.round: item for item in snapshot.corpus.search_yields}
+        self.assertTrue(yields[1].valid_discovery_round)
+        self.assertEqual({"succeeded": 1}, yields[1].query_statuses)
+        self.assertFalse(yields[2].valid_discovery_round)
+        self.assertIn(
+            "query-round-not-terminal-or-has-failure",
+            yields[2].invalid_reasons,
+        )
 
     def test_facet_gap_routes_candidate_and_evidence_stages_differently(self) -> None:
         snapshot = inspect_research(self.settings, "long-context-sparse-models")

@@ -30,6 +30,7 @@ from tools.wiki.indexer import WikiIndex, build_index
 from tools.wiki.models import Entity, listify
 from tools.wiki.writer import WikiSourceWriter, render_wiki_page
 
+from .artifacts import SemanticArtifactContext, SemanticArtifactRecorder
 from .config import HarnessSettings
 from .ingest_models import PaperDocument
 from .paper_ingest import extract_pdf_document
@@ -245,6 +246,7 @@ class EvidenceVerificationResult:
     changed_paths: Tuple[str, ...]
     diagnostic_codes: Tuple[str, ...]
     model_calls: int
+    semantic_artifact_ids: Tuple[str, ...] = ()
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -346,6 +348,7 @@ class EvidenceVerificationPipeline:
         *,
         verifier: Optional[EvidenceSemanticVerifier] = None,
         now: Optional[Callable[[], datetime]] = None,
+        artifact_recorder: Optional[SemanticArtifactRecorder] = None,
     ):
         self.settings = settings
         self.registry = SkillRegistry(settings.skills_root)
@@ -354,6 +357,7 @@ class EvidenceVerificationPipeline:
         self.verifier = verifier or self._default_verifier(settings)
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.writer = WikiSourceWriter(settings.wiki_root, settings.wiki_meta_root)
+        self.artifact_recorder = artifact_recorder
 
     @staticmethod
     def _default_verifier(settings: HarnessSettings) -> EvidenceSemanticVerifier:
@@ -490,7 +494,11 @@ class EvidenceVerificationPipeline:
             result["structured_evidence_ids"] = [edge.source for edge in edges]
         return result
 
-    def _verify_paper(self, snapshot: ResearchSnapshot) -> EvidenceVerificationResult:
+    def _verify_paper(
+        self,
+        snapshot: ResearchSnapshot,
+        artifact_context: Optional[SemanticArtifactContext] = None,
+    ) -> EvidenceVerificationResult:
         paper_id, pdf_path, index, targets = self._paper_target(snapshot)
         document = extract_pdf_document(pdf_path, self.settings.repository_root)
         prechecks = {
@@ -507,7 +515,9 @@ class EvidenceVerificationPipeline:
         records = []
         for entity in targets:
             record = _entity_record(entity)
-            record["deterministic_precheck"] = prechecks.get(entity.entity_id, {})
+            record["deterministic_precheck"] = prechecks.get(
+                str(entity.entity_id), {}
+            )
             records.append(record)
         draft = self.verifier.verify_paper(
             skill=self.skill,
@@ -532,6 +542,19 @@ class EvidenceVerificationPipeline:
                 f"missing={sorted(expected_ids - returned_ids)}, "
                 f"unexpected={sorted(returned_ids - expected_ids)}"
             )
+        artifact_ids: list[str] = []
+        if self.artifact_recorder is not None and artifact_context is not None:
+            artifact = self.artifact_recorder.record(
+                kind="evidence-verification",
+                context=artifact_context.with_updates(
+                    pdf_sha256=document.sha256,
+                    source_ids=tuple(sorted(expected_ids)),
+                ),
+                skill=self.skill,
+                schema_resources=("references/verification-contract.md",),
+                output=draft,
+            )
+            artifact_ids.append(artifact.artifact_id)
         decisions = {item.entity_id: item for item in draft.decisions}
         all_entities = index.unique_entities()
         verified_after = {
@@ -606,6 +629,12 @@ class EvidenceVerificationPipeline:
             pages[entity.relative_path] = render_wiki_page(metadata, entity.body)
             (verified if promotable else unresolved).append(entity_id)
         report = self.writer.publish(pages, allow_overwrite=True)
+        if self.artifact_recorder is not None and artifact_context is not None:
+            self.artifact_recorder.link_publication(
+                artifact_ids,
+                action_id=artifact_context.action_id,
+                changed_sources=tuple(f"wiki/{path}" for path in report.changed_paths),
+            )
         return EvidenceVerificationResult(
             target_id=paper_id,
             target_kind="paper-bundle",
@@ -617,6 +646,7 @@ class EvidenceVerificationPipeline:
                 dict.fromkeys(item.code for item in report.diagnostics)
             ),
             model_calls=1,
+            semantic_artifact_ids=tuple(artifact_ids),
         )
 
     @staticmethod
@@ -634,7 +664,10 @@ class EvidenceVerificationPipeline:
             )
         return sorted(candidates, key=lambda item: item.entity_id or "")[0]
 
-    def _verify_assessment(self) -> EvidenceVerificationResult:
+    def _verify_assessment(
+        self,
+        artifact_context: Optional[SemanticArtifactContext] = None,
+    ) -> EvidenceVerificationResult:
         index = build_index(self.settings.wiki_root, self.settings.wiki_meta_root)
         assessment = self._assessment_target(index)
         unique = index.unique_entities()
@@ -679,6 +712,18 @@ class EvidenceVerificationPipeline:
             raise EvidenceVerificationError(
                 "Assessment verifier must compare the complete cited evidence set"
             )
+        artifact_ids: list[str] = []
+        if self.artifact_recorder is not None and artifact_context is not None:
+            artifact = self.artifact_recorder.record(
+                kind="assessment-verification",
+                context=artifact_context.with_updates(
+                    source_ids=(assessment_id, *claim_ids, *evidence_ids),
+                ),
+                skill=self.skill,
+                schema_resources=("references/verification-contract.md",),
+                output=draft,
+            )
+            artifact_ids.append(artifact.artifact_id)
         supported = (
             draft.verdict == "supported"
             and draft.confirmed_result == assessment.metadata.get("result")
@@ -700,6 +745,12 @@ class EvidenceVerificationPipeline:
             {assessment.relative_path: render_wiki_page(metadata, assessment.body)},
             allow_overwrite=True,
         )
+        if self.artifact_recorder is not None and artifact_context is not None:
+            self.artifact_recorder.link_publication(
+                artifact_ids,
+                action_id=artifact_context.action_id,
+                changed_sources=tuple(f"wiki/{path}" for path in report.changed_paths),
+            )
         return EvidenceVerificationResult(
             target_id=assessment_id,
             target_kind="assessment",
@@ -711,6 +762,7 @@ class EvidenceVerificationPipeline:
                 dict.fromkeys(item.code for item in report.diagnostics)
             ),
             model_calls=1,
+            semantic_artifact_ids=tuple(artifact_ids),
         )
 
     def verify_next(
@@ -718,20 +770,21 @@ class EvidenceVerificationPipeline:
         *,
         gap: ResearchGap,
         snapshot: ResearchSnapshot,
+        artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> EvidenceVerificationResult:
         prefer_assessment = (
             gap.type == "contradiction_gap" or gap.key == "nonconsensus-review"
         )
         if prefer_assessment:
             try:
-                return self._verify_assessment()
+                return self._verify_assessment(artifact_context)
             except VerificationPreconditionError:
-                return self._verify_paper(snapshot)
+                return self._verify_paper(snapshot, artifact_context)
         try:
-            return self._verify_paper(snapshot)
+            return self._verify_paper(snapshot, artifact_context)
         except VerificationPreconditionError as paper_error:
             try:
-                return self._verify_assessment()
+                return self._verify_assessment(artifact_context)
             except VerificationPreconditionError:
                 raise paper_error
 

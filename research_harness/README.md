@@ -35,6 +35,13 @@ program-controlled.
   `ingest`, `verify`, and `analyze_claims`;
 - `research_control.py`: a read-only V0 control pass and the checkpointed V1
   inspect/decide/execute/observe loop;
+- `canary_models.py` / `canary.py` / `canary_worker.py`: strict execution
+  limits, isolated stage-bounded LangGraph runs, and a parent-enforced hard
+  wall-clock deadline;
+- `artifacts.py`: content-addressed immutable structured model outputs plus a
+  separate mutable publication manifest;
+- `trajectory.py`: evaluation JSONL derived from SQLite checkpoint history and
+  a non-destructive human-annotation sidecar;
 - `tools.py`: LangChain wrappers around Wiki, search-run, DeepXiv, and memory
   capabilities;
 - `graph.py`: prepare → model → ToolNode → observe loop;
@@ -83,6 +90,7 @@ D:\anaconda3\python.exe -B -m research_harness skills read search-paper referenc
   notes.
 - Secrets are read only from process environment variables and are never passed
   as tool arguments.
+- Configured remote model strings are restricted to `deepseek-v4-flash`.
 
 ## Persistence scopes
 
@@ -155,7 +163,17 @@ D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-
 D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-models --thread outer-v1 --allow-network
 D:\anaconda3\python.exe -B -m research_harness research resume long-context-sparse-models --thread outer-v1 --allow-network
 D:\anaconda3\python.exe -B -m research_harness research resume long-context-sparse-models --thread outer-v1 --mode checkpoint --allow-network
+D:\anaconda3\python.exe -B -m research_harness research canary long-context-sparse-models --run-id retrieval-v1 --allow-network --stop-after retrieval --max-actions 1 --deadline-seconds 120
+D:\anaconda3\python.exe -B -m research_harness research export-trajectory long-context-sparse-models --thread outer-v1
 ```
+
+The Canary command copies the Wiki and one bounded Search Run into
+`.harness/canary/<run-id>/`, uses its own SQLite checkpoint database, enforces
+provider/candidate/action/deadline limits, and checks that formal source truth
+did not change. Retrieval and screening are observation boundaries inside the
+existing `search` action, not new action types. Structured semantic outputs are
+stored before deterministic compilation; publication paths are linked later in
+`semantic-manifest.json`.
 
 The second `run` form requires `DEEPXIV_TOKEN` for provider search and the
 configured model-provider key for query planning, screening, ingest, verification,
