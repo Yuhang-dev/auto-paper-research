@@ -2,14 +2,52 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Union
+from urllib.parse import urlparse
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = REPOSITORY_ROOT / ".harness" / "research-harness.sqlite3"
+
+
+def _model_base_url_from_env() -> Optional[str]:
+    configured = os.getenv("HARNESS_MODEL_BASE_URL", "").strip()
+    if configured:
+        return configured
+    langchain_value = os.getenv("OPENAI_API_BASE", "").strip()
+    standard_value = os.getenv("OPENAI_BASE_URL", "").strip()
+    if (
+        langchain_value
+        and standard_value
+        and langchain_value.rstrip("/") != standard_value.rstrip("/")
+    ):
+        raise ValueError(
+            "OPENAI_API_BASE and OPENAI_BASE_URL must match when both are set"
+        )
+    return langchain_value or standard_value or None
+
+
+def _validate_model_base_url(value: str) -> None:
+    parsed = urlparse(value)
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(
+            "HARNESS_MODEL_BASE_URL must be an absolute http(s) "
+            "OpenAI-compatible endpoint"
+        )
+    if parsed.username or parsed.password:
+        raise ValueError(
+            "HARNESS_MODEL_BASE_URL must not contain credentials; "
+            "use OPENAI_API_KEY"
+        )
+    if parsed.query or parsed.fragment:
+        raise ValueError(
+            "HARNESS_MODEL_BASE_URL must not contain a query string or fragment"
+        )
 
 
 def _positive_int(value: str, name: str, *, minimum: int, maximum: int) -> int:
@@ -51,6 +89,7 @@ class HarnessSettings:
     research_root: Path = REPOSITORY_ROOT / "research"
     database_path: Path = DEFAULT_DB_PATH
     model: Optional[str] = None
+    model_base_url: Optional[str] = None
     workspace_id: str = "long-context-sparse-models"
     context_token_budget: int = 6000
     max_tool_iterations: int = 6
@@ -62,6 +101,7 @@ class HarnessSettings:
         *,
         database_path: Optional[Union[str, Path]] = None,
         model: Optional[str] = None,
+        model_base_url: Optional[str] = None,
         workspace_id: Optional[str] = None,
     ) -> "HarnessSettings":
         raw_database = database_path or os.getenv("HARNESS_DB_PATH") or DEFAULT_DB_PATH
@@ -71,6 +111,11 @@ class HarnessSettings:
         settings = cls(
             database_path=resolve_database_path(raw_database),
             model=model or os.getenv("HARNESS_MODEL") or None,
+            model_base_url=(
+                model_base_url.strip()
+                if model_base_url and model_base_url.strip()
+                else _model_base_url_from_env()
+            ),
             workspace_id=(
                 workspace_id
                 or os.getenv("HARNESS_WORKSPACE_ID")
@@ -112,13 +157,28 @@ class HarnessSettings:
             raise ValueError("max_tool_iterations must be between 1 and 30")
         if not 1000 <= self.tool_output_chars <= 100000:
             raise ValueError("tool_output_chars must be between 1000 and 100000")
-        if self.model and self.model.strip().casefold() not in {
-            "deepseek-v4-flash",
-            "openai:deepseek-v4-flash",
-        }:
-            raise ValueError(
-                "This project permits only the DeepSeek deepseek-v4-flash model"
-            )
+        if self.model_base_url:
+            _validate_model_base_url(self.model_base_url)
+        if self.model:
+            if not self.model.strip().startswith("openai:"):
+                raise ValueError(
+                    "HARNESS_MODEL must use openai:<served-model-name> for an "
+                    "OpenAI-compatible endpoint"
+                )
+            if not self.openai_model_name:
+                raise ValueError("HARNESS_MODEL must include a served model name")
+            if not self.model_base_url:
+                raise ValueError(
+                    "HARNESS_MODEL_BASE_URL, OPENAI_API_BASE, or OPENAI_BASE_URL "
+                    "is required when HARNESS_MODEL is configured"
+                )
+            if (
+                self.is_deepseek_endpoint
+                and self.openai_model_name != "deepseek-v4-flash"
+            ):
+                raise ValueError(
+                    "The DeepSeek endpoint permits only deepseek-v4-flash"
+                )
         if not self.wiki_root.is_dir():
             raise FileNotFoundError(f"Wiki root does not exist: {self.wiki_root}")
         if not self.wiki_meta_root.is_dir():
@@ -128,8 +188,57 @@ class HarnessSettings:
         if not self.research_root.is_dir():
             raise FileNotFoundError(f"Research root does not exist: {self.research_root}")
 
-    def with_model(self, model: str) -> "HarnessSettings":
-        return replace(self, model=model)
+    def with_model(
+        self,
+        model: str,
+        *,
+        model_base_url: Optional[str] = None,
+    ) -> "HarnessSettings":
+        updated = replace(
+            self,
+            model=model,
+            model_base_url=model_base_url or self.model_base_url,
+        )
+        updated.validate()
+        return updated
+
+    @property
+    def openai_model_name(self) -> Optional[str]:
+        if not self.model or ":" not in self.model:
+            return None
+        return self.model.split(":", 1)[1].strip() or None
+
+    @property
+    def model_endpoint_host(self) -> Optional[str]:
+        if not self.model_base_url:
+            return None
+        return urlparse(self.model_base_url).hostname
+
+    @property
+    def is_deepseek_endpoint(self) -> bool:
+        host = (self.model_endpoint_host or "").casefold().rstrip(".")
+        return host == "deepseek.com" or host.endswith(".deepseek.com")
+
+    @property
+    def normalized_model_base_url(self) -> Optional[str]:
+        if not self.model_base_url:
+            return None
+        return self.model_base_url.rstrip("/")
+
+    @property
+    def model_runtime_fingerprint(self) -> str:
+        """Identify the non-secret model runtime used by resumable graphs."""
+
+        payload = json.dumps(
+            {
+                "adapter": "langchain-openai",
+                "model": self.openai_model_name,
+                "base_url": self.normalized_model_base_url,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def ensure_storage_directory(self) -> Path:
         path = resolve_database_path(self.database_path)

@@ -25,6 +25,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     settings = HarnessSettings.from_env(
         database_path=request.get("base_database_path"),
         model=request.get("model"),
+        model_base_url=request.get("model_base_url"),
         workspace_id=request.get("workspace_id"),
     )
     report = run_canary(

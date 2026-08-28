@@ -7,7 +7,6 @@ import re
 from types import TracebackType
 from typing import Any, Dict, List, Optional, Sequence, Type
 
-from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -24,6 +23,7 @@ from langgraph.runtime import Runtime
 
 from .config import HarnessSettings
 from .memory import recall_notes, render_memory_context
+from .model_client import create_chat_model
 from .persistence import HarnessPersistence
 from .prompts import render_system_prompt
 from .skill_registry import SkillRegistry
@@ -190,9 +190,9 @@ def load_chat_model(settings: HarnessSettings) -> BaseChatModel:
     if not settings.model:
         raise ValueError(
             "No model configured. Set HARNESS_MODEL or pass --model, for example "
-            "openai:deepseek-v4-flash."
+            "openai:<served-model-name>."
         )
-    return init_chat_model(settings.model)
+    return create_chat_model(settings)
 
 
 class ResearchHarness:
@@ -248,6 +248,11 @@ class ResearchHarness:
         clean_task = task.strip()
         if not clean_task:
             raise ValueError("task cannot be empty")
+        if self._provided_model is None and not allow_network:
+            raise ValueError(
+                "The configured OpenAI-compatible model endpoint requires "
+                "explicit --allow-network authorization, including localhost"
+            )
         if not THREAD_ID_PATTERN.fullmatch(thread_id):
             raise ValueError(
                 "thread_id must be 1-200 ASCII letters, digits, dots, colons, underscores, or hyphens"

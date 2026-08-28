@@ -49,10 +49,13 @@ search action
 
 ```powershell
 $env:DEEPXIV_TOKEN = Read-Host -Prompt "DeepXiv Token" -MaskInput
-$env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
-$env:OPENAI_API_BASE = "https://api.deepseek.com"
-$env:HARNESS_MODEL = "openai:deepseek-v4-flash"
+$env:OPENAI_API_KEY = Read-Host -Prompt "Local model API key" -MaskInput
+$env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
+$env:HARNESS_MODEL = "openai:<served-model-id>"
 ```
+
+本地 endpoint 也必须传 `--allow-network`。服务能力要求和 DeepSeek 兼容配置见
+`docs/OPENAI_COMPATIBLE_MODEL.md`。
 
 第一步只验证真实检索：
 
@@ -142,7 +145,7 @@ D:\anaconda3\python.exe -B -m research_harness `
 
 - 运行控制真源：Canary SQLite checkpoint；
 - 领域数据真源：隔离 Markdown/YAML；
-- 模型判断原始记录：immutable semantic artifact；
+- 模型判断原始记录：immutable semantic artifact，并记录非秘密的 model/base URL；
 - artifact 到发布页面的关联：mutable semantic manifest；
 - 人工 adjudication：sidecar annotation；按 control action、candidate、ingest entity、
   verification 分别记录 action/relevance/extraction/locator/verdict/promotion 判断；

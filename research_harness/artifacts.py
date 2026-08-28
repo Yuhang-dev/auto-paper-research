@@ -145,6 +145,7 @@ class SemanticArtifactRecorder:
         artifact_root: Path,
         *,
         model_name: Optional[str] = None,
+        model_base_url: Optional[str] = None,
     ):
         self.repository_root = repository_root.resolve()
         self.artifact_root = artifact_root.resolve()
@@ -155,6 +156,7 @@ class SemanticArtifactRecorder:
                 "Semantic artifact root must stay inside the repository"
             ) from exc
         self.model_name = model_name
+        self.model_base_url = model_base_url.rstrip("/") if model_base_url else None
 
     @property
     def manifest_path(self) -> Path:
@@ -193,10 +195,13 @@ class SemanticArtifactRecorder:
         if validation_details is not None:
             validation["details"] = _redact(validation_details)
         identity = {
-            "schema_version": "0.1",
+            "schema_version": "0.2",
             "action_id": context.action_id,
             "kind": kind,
-            "model": {"name": self.model_name},
+            "model": {
+                "name": self.model_name,
+                "base_url": self.model_base_url,
+            },
             "skill": {
                 "name": skill.name,
                 "skill_sha256": self._skill_hash(skill),

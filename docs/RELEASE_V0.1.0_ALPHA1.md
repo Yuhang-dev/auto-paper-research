@@ -3,6 +3,10 @@
 这是首个供异机拉取、安装和联网 Canary 验证的预发布版本，不是正式研究结论版本。
 `done-criteria.yaml` 仍为 `draft`，系统不会把当前语料规模误判为“调研完成”。
 
+> 本文保留 `v0.1.0-alpha.1` 当时的 DeepSeek-only 配置。当前工作树已支持显式的
+> 本地 OpenAI-compatible endpoint；新配置请以
+> `docs/OPENAI_COMPATIBLE_MODEL.md` 为准。
+
 ## 发布包保留内容
 
 - `research_harness/`：LangGraph inner/outer loop、SQLite checkpoint/memory、Canary、轨迹和确定性控制层；

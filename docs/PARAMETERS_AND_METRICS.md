@@ -76,21 +76,23 @@ DoneCriteria 按以下优先级解析：
 | 参数 | 类别 | 默认值 | 允许范围 / 约束 | 作用 |
 |---|---|---:|---|---|
 | `HARNESS_DB_PATH` / `--db` | A | `.harness/research-harness.sqlite3` | 必须是文件；扩展名 `.db`、`.sqlite` 或 `.sqlite3`；拒绝 `C:` 和 `:memory:` | LangGraph checkpoint 与跨 thread memory 的 SQLite 文件 |
-| `HARNESS_MODEL` / `--model` | A | 无 | LangChain model string | 语义规划、筛选、论文抽取、验证、非共识分析使用的模型 |
+| `HARNESS_MODEL` / `--model` | A | 无 | 必须为 `openai:<served-model-name>` | 语义规划、筛选、论文抽取、验证、非共识分析使用的模型 |
+| `HARNESS_MODEL_BASE_URL` / `--model-base-url` | A | 无 | 绝对 HTTP(S) OpenAI-compatible API root；配置模型时必填 | 显式模型 endpoint，不允许隐式回退到 OpenAI 公网默认地址 |
 | `HARNESS_WORKSPACE_ID` / `--workspace` | A | `long-context-sparse-models` | 非空，最多 120 字符 | 跨 thread memory namespace |
 | `HARNESS_CONTEXT_TOKENS` | A | `6000` | `512..200000` 整数 | Inner Agent Loop 每次发送给模型的最近消息 token 预算 |
 | `HARNESS_MAX_TOOL_ITERATIONS` | A | `6` | `1..30` 整数 | Inner Agent Loop 每轮最多经历多少次 tool-observe 循环；不控制 Outer Loop |
 | `HARNESS_TOOL_OUTPUT_CHARS` | A | `12000` | `1000..100000` 整数 | 每个 LangChain tool 返回给模型的 JSON 字符上限 |
 
-项目只允许 DeepSeek `deepseek-v4-flash`。`HarnessSettings.validate()` 只接受
-`deepseek-v4-flash` 或 `openai:deepseek-v4-flash`；测试仍可通过构造器注入本地 fake model，而不配置
-远程模型字符串。
+Harness 只使用 OpenAI-compatible adapter，但本地 endpoint 可以暴露任意明确的
+model ID。裸模型名和其他 provider 前缀会被拒绝。若 endpoint host 属于 DeepSeek
+官方域名，则仍只允许精确的 `openai:deepseek-v4-flash`。测试可通过构造器注入
+进程内 fake model，而不配置 socket endpoint。
 
 推荐配置：
 
 ```powershell
-$env:HARNESS_MODEL = "openai:deepseek-v4-flash"
-$env:OPENAI_API_BASE = "https://api.deepseek.com"
+$env:HARNESS_MODEL = "openai:<served-model-id>"
+$env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
 $env:HARNESS_DB_PATH = "D:/wiki-papersearch/.harness/research-harness.sqlite3"
 ```
 
@@ -98,8 +100,10 @@ $env:HARNESS_DB_PATH = "D:/wiki-papersearch/.harness/research-harness.sqlite3"
 
 | 参数 | 类别 | 默认值 | 作用与注意事项 |
 |---|---|---:|---|
-| `OPENAI_API_BASE` | A | 由适配器决定 | OpenAI-compatible endpoint；本项目应指向 `https://api.deepseek.com` |
-| `OPENAI_API_KEY` | A | 无 | LangChain OpenAI-compatible adapter 实际读取的 DeepSeek Key |
+| `HARNESS_MODEL_BASE_URL` | A | 无 | 模型 endpoint 的项目级规范变量；优先于兼容变量 |
+| `OPENAI_API_BASE` | A | 无 | 旧 LangChain-compatible endpoint 变量；仅在未设置规范变量时读取 |
+| `OPENAI_BASE_URL` | A | 无 | 旧 OpenAI SDK-compatible endpoint 变量；与同时存在的 `OPENAI_API_BASE` 不一致时拒绝启动 |
+| `OPENAI_API_KEY` | A | 无 | OpenAI-compatible endpoint 的凭证；本地无鉴权服务也需非空 sentinel |
 | `DEEPXIV_TOKEN` | A | 无 | DeepXiv SDK 凭证；没有时联网检索返回 `blocked-credential` |
 | `LANGGRAPH_STRICT_MSGPACK` | A/F | `true` | 持久化兼容保护；`persistence.py` 只在未设置时写入 `true` |
 | `TIKTOKEN_CACHE_DIR` | A | `.harness/tiktoken-cache`（子进程 fallback） | 将 tokenizer 缓存保留在 D 盘项目目录 |
@@ -605,6 +609,7 @@ HARNESS_MAX_TOOL_ITERATIONS * 4 + 8
 | `attempts_by_gap_action.tool_failures` | outcome=`tool_failure` 次数 |
 | `attempts_by_gap_action.negative_results` | outcome=`negative_research_result` 次数 |
 | `decision_history` / `action_history` | checkpoint 中的确定性历史 |
+| `model_runtime_fingerprint` | 对 adapter、served model ID 和规范化 base URL 计算 SHA-256；精确恢复时必须一致，不包含 key |
 
 Outer autonomous graph 的 `recursion_limit` 自动计算为：
 
@@ -794,7 +799,8 @@ Wiki 页面字段、relation 与 verified gate 详见 `wiki/_meta/schema.yaml`�
 
 ```powershell
 D:\anaconda3\python.exe -B -m research_harness `
-  --model openai:deepseek-v4-flash `
+  --model "openai:<served-model-id>" `
+  --model-base-url "http://127.0.0.1:8000/v1" `
   research canary long-context-sparse-models `
   --run-id retrieval-v1 `
   --allow-network `

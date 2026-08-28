@@ -61,10 +61,13 @@ try {
             "$packageName/.env.example",
             "$packageName/requirements-harness.txt",
             "$packageName/research_harness/__main__.py",
+            "$packageName/research_harness/model_client.py",
             "$packageName/skills/search-paper/SKILL.md",
             "$packageName/tools/wiki/__main__.py",
             "$packageName/wiki/_meta/schema.yaml",
             "$packageName/research/long-context-sparse-models/done-criteria.yaml",
+            "$packageName/docs/OPENAI_COMPATIBLE_MODEL.md",
+            "$packageName/docs/RELEASE_V0.1.0_ALPHA2.md",
             "$packageName/sources/papers/longlora-iclr-2024.pdf"
         )
         foreach ($requiredEntry in $requiredEntries) {
@@ -77,6 +80,8 @@ try {
             '(^|/)(\.git|\.vscode|\.harness|dist|tmp|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)(/|$)',
             '(^|/)\.env$',
             '\.(db|sqlite|sqlite3)(-wal|-shm)?$',
+            '\.(log|pem|key)$',
+            '(^|/)credentials[^/]*\.json$',
             '\.py[co]$'
         )
         foreach ($entryName in $entryNames) {

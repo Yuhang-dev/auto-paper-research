@@ -80,8 +80,8 @@ D:\anaconda3\python.exe -B -m research_harness skills read search-paper referenc
 - Automatic PDF acquisition is limited to an explicitly selected arXiv
   candidate, approved HTTPS hosts, a bounded file size, and `sources/papers/`
   under the repository.
-- DeepXiv and remote semantic extraction are denied unless runtime context has
-  `allow_network=True`.
+- DeepXiv and socket-backed model calls, including a localhost OpenAI-compatible
+  endpoint, require runtime context with `allow_network=True`.
 - Missing credentials, a missing validated query plan, and unsupported actions
   stop before execution with a structured `precondition_blocked` result.
 - Tool output is bounded before it enters model context.
@@ -90,7 +90,9 @@ D:\anaconda3\python.exe -B -m research_harness skills read search-paper referenc
   notes.
 - Secrets are read only from process environment variables and are never passed
   as tool arguments.
-- Configured remote model strings are restricted to `deepseek-v4-flash`.
+- Configured model strings use `openai:<served-model-name>` and an explicit
+  OpenAI-compatible base URL. Official DeepSeek endpoints remain restricted to
+  `deepseek-v4-flash`.
 
 ## Persistence scopes
 

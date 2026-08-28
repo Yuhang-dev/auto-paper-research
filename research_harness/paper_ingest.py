@@ -26,7 +26,6 @@ from typing import (
     Tuple,
 )
 
-from langchain.chat_models import init_chat_model
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -53,6 +52,7 @@ from .ingest_models import (
     PaperIngestResult,
     PdfPageText,
 )
+from .model_client import create_chat_model
 from .skill_registry import SkillRegistry, SkillSpec
 
 
@@ -1214,7 +1214,7 @@ class PaperIngestPipeline:
             raise ValueError(
                 "Paper ingestion needs an injected extractor or HARNESS_MODEL/--model."
             )
-        return LangChainPaperDraftExtractor(init_chat_model(settings.model))
+        return LangChainPaperDraftExtractor(create_chat_model(settings))
 
     @property
     def requires_network(self) -> bool:

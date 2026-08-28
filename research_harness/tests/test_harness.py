@@ -20,6 +20,7 @@ from research_harness.config import (
 from research_harness.cli import main as cli_main
 from research_harness.graph import ResearchHarness
 from research_harness.memory import list_notes, recall_notes, remember_note
+from research_harness.model_client import create_chat_model
 from research_harness.persistence import HarnessPersistence
 from research_harness.research_control import (
     AutonomousResearchController,
@@ -93,16 +94,126 @@ class ConfigurationAndPersistenceTests(HarnessTestCase):
         with self.assertRaisesRegex(ValueError, "cannot be on C"):
             resolve_database_path(r"C:\research\memory.sqlite3")
 
-    def test_configured_remote_model_is_restricted_to_v4_flash(self) -> None:
-        with self.assertRaisesRegex(ValueError, "deepseek-v4-flash"):
-            replace(self.settings, model="openai:another-model").validate()
-        with self.assertRaisesRegex(ValueError, "deepseek-v4-flash"):
+    def test_openai_compatible_local_model_configuration(self) -> None:
+        settings = replace(
+            self.settings,
+            model="openai:qwen2.5:32b",
+            model_base_url="http://127.0.0.1:8000/v1",
+        )
+        settings.validate()
+        self.assertEqual("qwen2.5:32b", settings.openai_model_name)
+        self.assertEqual("127.0.0.1", settings.model_endpoint_host)
+
+        with mock.patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "local-test-key"},
+            clear=False,
+        ):
+            model = create_chat_model(settings)
+        self.assertEqual("ChatOpenAI", type(model).__name__)
+        self.assertEqual("qwen2.5:32b", model.model_name)
+        self.assertEqual(
+            "http://127.0.0.1:8000/v1",
+            str(model.openai_api_base).rstrip("/"),
+        )
+
+    def test_model_configuration_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "openai:<served-model-name>"):
             replace(
-                self.settings, model="openai:deepseek-v4-flash-experimental"
+                self.settings,
+                model="deepseek-v4-flash",
+                model_base_url="https://api.deepseek.com",
+            ).validate()
+        with self.assertRaisesRegex(ValueError, "openai:<served-model-name>"):
+            replace(
+                self.settings,
+                model="OpenAI:local-model",
+                model_base_url="http://localhost:8000/v1",
+            ).validate()
+        with self.assertRaisesRegex(ValueError, "BASE_URL"):
+            replace(self.settings, model="openai:local-model").validate()
+        with self.assertRaisesRegex(ValueError, "absolute http"):
+            replace(
+                self.settings,
+                model="openai:local-model",
+                model_base_url="localhost:8000/v1",
+            ).validate()
+        with self.assertRaisesRegex(ValueError, "must not contain credentials"):
+            replace(
+                self.settings,
+                model="openai:local-model",
+                model_base_url="http://user:password@localhost:8000/v1",
+            ).validate()
+        with self.assertRaisesRegex(ValueError, "only deepseek-v4-flash"):
+            replace(
+                self.settings,
+                model="openai:another-model",
+                model_base_url="https://api.deepseek.com/v1",
+            ).validate()
+        with self.assertRaisesRegex(ValueError, "only deepseek-v4-flash"):
+            replace(
+                self.settings,
+                model="openai:another-model",
+                model_base_url="https://api.deepseek.com./v1",
             ).validate()
         replace(
-            self.settings, model="openai:deepseek-v4-flash"
+            self.settings,
+            model="openai:deepseek-v4-flash",
+            model_base_url="https://api.deepseek.com",
         ).validate()
+
+    def test_model_base_url_environment_contract(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "HARNESS_MODEL": "openai:local-model",
+                "HARNESS_MODEL_BASE_URL": "http://localhost:8000/v1",
+                "OPENAI_API_BASE": "http://legacy.invalid/v1",
+            },
+            clear=True,
+        ):
+            settings = HarnessSettings.from_env()
+        self.assertEqual("http://localhost:8000/v1", settings.model_base_url)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_BASE": "http://localhost:8000/v1",
+                "OPENAI_BASE_URL": "http://localhost:9000/v1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "must match"):
+                HarnessSettings.from_env()
+
+    def test_model_client_requires_api_key(self) -> None:
+        settings = replace(
+            self.settings,
+            model="openai:local-model",
+            model_base_url="http://127.0.0.1:8000/v1",
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY"):
+                create_chat_model(settings)
+
+    def test_socket_model_requires_explicit_network_authority(self) -> None:
+        settings = replace(
+            self.settings,
+            model="openai:local-model",
+            model_base_url="http://127.0.0.1:8000/v1",
+        )
+        with mock.patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "local-test-key"},
+            clear=False,
+        ):
+            with ResearchHarness(settings) as harness:
+                with self.assertRaisesRegex(ValueError, "including localhost"):
+                    harness.invoke(
+                        "do not send this prompt",
+                        thread_id="local-model-denied",
+                        allow_network=False,
+                    )
 
     def test_sqlite_checkpoint_and_store_share_one_file(self) -> None:
         with HarnessPersistence(self.settings) as persistence:
@@ -926,6 +1037,10 @@ class ResearchEvaluationTests(HarnessTestCase):
                 )
             pending = controller.get_state("checkpoint-resume")
             self.assertIn("execute_action", pending.next)
+            self.assertEqual(
+                self.settings.model_runtime_fingerprint,
+                pending.values["model_runtime_fingerprint"],
+            )
 
             with self.assertRaisesRegex(
                 ValueError,
@@ -937,6 +1052,33 @@ class ResearchEvaluationTests(HarnessTestCase):
                     mode="checkpoint",
                 )
 
+        changed_runtime = replace(
+            self.settings,
+            model="openai:changed-local-model",
+            model_base_url="http://127.0.0.1:8000/v1",
+        )
+        with AutonomousResearchController(
+            changed_runtime,
+            research_id="long-context-sparse-models",
+            action_executor=executor,
+            inspector=inspector,
+        ) as controller:
+            with self.assertRaisesRegex(
+                ValueError,
+                "preserve its model and endpoint",
+            ):
+                controller.resume(
+                    thread_id="checkpoint-resume",
+                    allow_network=True,
+                    mode="checkpoint",
+                )
+
+        with AutonomousResearchController(
+            self.settings,
+            research_id="long-context-sparse-models",
+            action_executor=executor,
+            inspector=inspector,
+        ) as controller:
             resumed = controller.resume(
                 thread_id="checkpoint-resume",
                 allow_network=True,

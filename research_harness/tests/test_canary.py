@@ -87,8 +87,12 @@ class CanaryTests(unittest.TestCase):
             / "v0-discovery.yaml"
         )
         before = _sha256(source)
+        model_settings = self.settings.with_model(
+            "openai:local-test-model",
+            model_base_url="http://127.0.0.1:8000/v1",
+        )
         isolated, root, run_path = prepare_canary_workspace(
-            self.settings,
+            model_settings,
             research_id="long-context-sparse-models",
             run_id=self.run_id,
             limits=CanaryLimits(stop_after="retrieval", max_actions=1),
@@ -97,6 +101,8 @@ class CanaryTests(unittest.TestCase):
         self.assertEqual(root, self.canary_root)
         self.assertTrue(run_path.is_file())
         self.assertEqual(isolated.database_path, root / "canary.sqlite3")
+        self.assertEqual(model_settings.model, isolated.model)
+        self.assertEqual(model_settings.model_base_url, isolated.model_base_url)
         payload = run_path.read_text(encoding="utf-8")
         self.assertEqual(payload.count("status: planned"), 2)
         run_path.write_text(payload + "\n# isolated mutation\n", encoding="utf-8")
@@ -190,6 +196,7 @@ class CanaryTests(unittest.TestCase):
             REPOSITORY_ROOT,
             root / "artifacts",
             model_name="fake:model",
+            model_base_url="http://127.0.0.1:8000/v1/",
         )
         skill = SkillRegistry(REPOSITORY_ROOT / "skills").get("search-paper")
         context = SemanticArtifactContext(
@@ -230,7 +237,15 @@ class CanaryTests(unittest.TestCase):
         self.assertEqual(before, _sha256(artifact_path))
         artifact_text = artifact_path.read_text(encoding="utf-8")
         self.assertNotIn("must-not-persist", artifact_text)
-        self.assertEqual(json.loads(artifact_text)["output"]["api_key"], "[REDACTED]")
+        artifact_payload = json.loads(artifact_text)
+        self.assertEqual(artifact_payload["output"]["api_key"], "[REDACTED]")
+        self.assertEqual(
+            artifact_payload["model"],
+            {
+                "name": "fake:model",
+                "base_url": "http://127.0.0.1:8000/v1",
+            },
+        )
         manifest = json.loads(recorder.manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(
             manifest["artifacts"][first.artifact_id]["publications"][0][

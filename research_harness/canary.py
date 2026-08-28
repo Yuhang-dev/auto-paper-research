@@ -313,6 +313,7 @@ def prepare_canary_workspace(
         research_root=research_root,
         database_path=canary_root / "canary.sqlite3",
         model=settings.model,
+        model_base_url=settings.model_base_url,
         workspace_id=f"canary:{run_id}",
         context_token_budget=settings.context_token_budget,
         max_tool_iterations=settings.max_tool_iterations,
@@ -517,6 +518,7 @@ def run_canary(
         settings.repository_root,
         canary_root / "artifacts",
         model_name=settings.model,
+        model_base_url=settings.normalized_model_base_url,
     )
     runtime = (
         SearchRuntime(

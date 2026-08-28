@@ -1,5 +1,9 @@
 __pycache__/
 *.py[cod]
+*.log
+*.pem
+*.key
+credentials*.json
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

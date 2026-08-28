@@ -18,6 +18,8 @@
 - [`docs/PARAMETERS_AND_METRICS.md`](docs/PARAMETERS_AND_METRICS.md)：全部可调参数、计算指标、公式与内部限制
 - [`docs/CANARY_AND_EVALUATION.md`](docs/CANARY_AND_EVALUATION.md)：隔离联网测试、硬边界与分阶段验收
 - [`docs/DONE_CRITERIA_ACTIVATION_CHECKLIST.md`](docs/DONE_CRITERIA_ACTIVATION_CHECKLIST.md)：正式 DoneCriteria 激活前审核项
+- [`docs/OPENAI_COMPATIBLE_MODEL.md`](docs/OPENAI_COMPATIBLE_MODEL.md)：本地 OpenAI-compatible 模型接入与能力要求
+- [`docs/RELEASE_V0.1.0_ALPHA2.md`](docs/RELEASE_V0.1.0_ALPHA2.md)：本地模型接入预发布包、迁移说明与异机测试步骤
 - [`docs/RELEASE_V0.1.0_ALPHA1.md`](docs/RELEASE_V0.1.0_ALPHA1.md)：首个异机测试包的内容、安装、Canary 与已知限制
 
 第一轮检索计划见：
@@ -207,14 +209,27 @@ PyYAML 6.0.2、Pydantic 2.10.3、`deepxiv-sdk` 1.0.0 和 pypdf 6.16.2。
 PowerShell 会话中设置：
 
 ```powershell
+$env:HARNESS_MODEL = "openai:<本地服务暴露的模型 ID>"
+$env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
+$env:OPENAI_API_KEY = Read-Host -Prompt "Local model API key" -MaskInput
+```
+
+Harness 会显式构造 `ChatOpenAI(model, base_url, api_key)`，不会再依赖 LangChain 猜测
+provider。`HARNESS_MODEL` 必须保留 `openai:` 前缀，冒号后是本地服务 `/v1/models`
+返回的精确模型 ID。本地 HTTP 调用仍属于 socket I/O，运行时必须显式传
+`--allow-network`。不要把模型或 DeepXiv Key 写入 `.env`、YAML、SQLite research
+memory、命令参数或日志。
+
+若仍使用 DeepSeek 官方 endpoint：
+
+```powershell
 $env:HARNESS_MODEL = "openai:deepseek-v4-flash"
-$env:OPENAI_API_BASE = "https://api.deepseek.com"
+$env:HARNESS_MODEL_BASE_URL = "https://api.deepseek.com"
 $env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
 ```
 
-这里的 `OPENAI_*` 名称来自 LangChain 的 OpenAI-compatible adapter；Base URL 明确
-指向 DeepSeek，模型固定为 `deepseek-v4-flash`。不要把 DeepSeek 或 DeepXiv Key 写入
-`.env`、YAML、SQLite research memory、命令参数或日志。
+DeepSeek 官方域名继续强制只允许 `deepseek-v4-flash`。完整 endpoint 优先级、JSON
+mode 和 tool-calling 能力要求见 `docs/OPENAI_COMPATIBLE_MODEL.md`。
 
 DeepXiv SDK 只在获准的非 dry-run 调用中延迟导入；其 tiktoken 编码缓存默认
 定向到 `D:\wiki-papersearch\.harness\tiktoken-cache`，离线诊断和测试不会为了
@@ -247,18 +262,18 @@ Canary 只写 `.harness/canary/<run-id>/`，不修改正式 Wiki、Search Run �
 ```powershell
 D:\anaconda3\python.exe -B -m research_harness run `
   "检查 Wiki 中 LongLoRA 的方法和证据缺口" `
-  --thread sparse-review-01
+  --thread sparse-review-01 --allow-network
 ```
 
 继续使用相同 `--thread` 就会恢复该线程。交互模式：
 
 ```powershell
 D:\anaconda3\python.exe -B -m research_harness chat `
-  --thread sparse-review-01
+  --thread sparse-review-01 --allow-network
 ```
 
-DeepXiv 网络执行默认关闭。只有同时配置 `DEEPXIV_TOKEN` 并显式传入
-`--allow-network` 时，`deepxiv_search_run` 才能执行非 dry-run 检索：
+Socket I/O 默认关闭，包括 localhost 模型。只有显式传入 `--allow-network` 才会调用
+配置的模型 endpoint；DeepXiv 非 dry-run 检索还必须同时配置 `DEEPXIV_TOKEN`：
 
 ```powershell
 D:\anaconda3\python.exe -B -m research_harness run `

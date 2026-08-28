@@ -20,7 +20,6 @@ from typing import (
     Tuple,
 )
 
-from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -31,6 +30,7 @@ from tools.wiki.writer import WikiSourceWriter, render_wiki_page
 
 from .artifacts import SemanticArtifactContext, SemanticArtifactRecorder
 from .config import HarnessSettings
+from .model_client import create_chat_model
 from .research_models import NonConsensusResult, ResearchGap, ResearchSnapshot
 from .skill_registry import SkillRegistry, SkillSpec
 
@@ -256,7 +256,7 @@ class NonConsensusAnalysisPipeline:
             raise NonConsensusPreconditionError(
                 "Claim analysis needs an injected analyzer or HARNESS_MODEL/--model."
             )
-        return LangChainClaimSemanticAnalyzer(init_chat_model(settings.model))
+        return LangChainClaimSemanticAnalyzer(create_chat_model(settings))
 
     @property
     def requires_network(self) -> bool:

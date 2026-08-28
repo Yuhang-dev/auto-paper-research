@@ -21,7 +21,6 @@ from typing import (
 )
 
 import yaml  # type: ignore[import-untyped]
-from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -33,6 +32,7 @@ from tools.wiki.writer import WikiSourceWriter, render_wiki_page
 from .artifacts import SemanticArtifactContext, SemanticArtifactRecorder
 from .config import HarnessSettings
 from .ingest_models import PaperDocument
+from .model_client import create_chat_model
 from .paper_ingest import extract_pdf_document
 from .research_models import NonConsensusResult, ResearchGap, ResearchSnapshot
 from .skill_registry import SkillRegistry, SkillSpec
@@ -365,7 +365,7 @@ class EvidenceVerificationPipeline:
             raise VerificationPreconditionError(
                 "Evidence verification needs an injected verifier or HARNESS_MODEL/--model."
             )
-        return LangChainEvidenceSemanticVerifier(init_chat_model(settings.model))
+        return LangChainEvidenceSemanticVerifier(create_chat_model(settings))
 
     @property
     def requires_network(self) -> bool:

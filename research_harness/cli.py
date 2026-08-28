@@ -60,7 +60,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--db", type=Path, help="SQLite path; C: is rejected.")
     parser.add_argument(
-        "--model", help="LangChain model string, e.g. openai:deepseek-v4-flash."
+        "--model",
+        help="OpenAI-compatible model string, e.g. openai:<served-model-name>.",
+    )
+    parser.add_argument(
+        "--model-base-url",
+        help="OpenAI-compatible API root, e.g. http://127.0.0.1:8000/v1.",
     )
     parser.add_argument("--workspace", help="Cross-thread memory namespace.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -230,6 +235,7 @@ def _settings(args: argparse.Namespace) -> HarnessSettings:
     return HarnessSettings.from_env(
         database_path=args.db,
         model=args.model,
+        model_base_url=args.model_base_url,
         workspace_id=args.workspace,
     )
 
@@ -317,6 +323,7 @@ def _doctor(settings: HarnessSettings, output_format: str) -> int:
         except importlib.metadata.PackageNotFoundError:
             packages[name] = None
     path = settings.database_path
+    openai_key_configured = bool(os.getenv("OPENAI_API_KEY", "").strip())
     result = {
         "ok": diagnostic_counts["ERROR"] == 0,
         "repository_root": str(settings.repository_root),
@@ -328,7 +335,12 @@ def _doctor(settings: HarnessSettings, output_format: str) -> int:
         "checkpoint_counts": checkpoint_counts,
         "model": settings.model,
         "model_configured": bool(settings.model),
-        "openai_key_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "model_base_url": settings.model_base_url,
+        "model_endpoint_host": settings.model_endpoint_host,
+        "openai_key_configured": openai_key_configured,
+        "model_configuration_ready": bool(
+            settings.model and settings.model_base_url and openai_key_configured
+        ),
         "deepxiv_token_configured": bool(os.getenv("DEEPXIV_TOKEN")),
         "strict_msgpack": os.getenv("LANGGRAPH_STRICT_MSGPACK") == "true",
         "skills": {"count": len(registry), "names": list(registry.names)},
@@ -655,6 +667,7 @@ def _run_research_canary(
         "source_run": str(args.source_run) if args.source_run else None,
         "base_database_path": str(settings.database_path),
         "model": settings.model,
+        "model_base_url": settings.model_base_url,
         "workspace_id": settings.workspace_id,
     }
     with tempfile.NamedTemporaryFile(

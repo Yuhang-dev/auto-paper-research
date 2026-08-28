@@ -32,7 +32,6 @@ from typing import (
 )
 
 import yaml  # type: ignore[import-untyped]
-from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -41,6 +40,7 @@ from tools.wiki.indexer import build_index
 
 from .artifacts import SemanticArtifactContext, SemanticArtifactRecorder
 from .config import HarnessSettings
+from .model_client import create_chat_model
 from .research_models import ResearchGap, ResearchSnapshot
 from .skill_registry import SkillRegistry, SkillSpec
 
@@ -387,7 +387,7 @@ class SearchRuntime:
             raise SearchRuntimeError(
                 "Search planning/screening needs an injected engine or HARNESS_MODEL/--model."
             )
-        return LangChainSearchSemanticEngine(init_chat_model(settings.model))
+        return LangChainSearchSemanticEngine(create_chat_model(settings))
 
     @property
     def requires_network(self) -> bool:

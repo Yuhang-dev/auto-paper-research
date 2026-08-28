@@ -819,17 +819,20 @@ D:\anaconda3\python.exe -B -m research_harness research evaluate long-context-sp
 D:\anaconda3\python.exe -B -m research_harness research step long-context-sparse-models --thread outer-v0
 ```
 
-执行自主研究循环（当前模型固定为 DeepSeek V4 Flash）：
+执行自主研究循环（以下示例使用本地 OpenAI-compatible endpoint）：
 
 ```powershell
 $env:DEEPXIV_TOKEN = Read-Host -Prompt "DeepXiv Token" -MaskInput
-$env:HARNESS_MODEL = "openai:deepseek-v4-flash"
-$env:OPENAI_API_BASE = "https://api.deepseek.com"
-$env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
+$env:HARNESS_MODEL = "openai:<served-model-id>"
+$env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
+$env:OPENAI_API_KEY = Read-Host -Prompt "Local model API key" -MaskInput
 D:\anaconda3\python.exe -B -m research_harness research run long-context-sparse-models `
   --thread outer-v1 `
   --allow-network
 ```
+
+模型 client、endpoint 优先级、JSON mode 与 tool-calling contract 见
+`docs/OPENAI_COMPATIBLE_MODEL.md`。localhost 调用仍需 `--allow-network`。
 
 在正式循环前运行分阶段 Canary：
 

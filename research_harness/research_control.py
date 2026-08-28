@@ -257,6 +257,7 @@ def build_autonomous_research_graph(
             "research_id": research_id,
             "phase": "inspect",
             "allow_network": bool(state.get("allow_network")),
+            "model_runtime_fingerprint": settings.model_runtime_fingerprint,
             "stop_reason": "",
             "action_result": {},
         }
@@ -668,6 +669,13 @@ class AutonomousResearchController:
             raise ValueError(
                 "Exact checkpoint resume must preserve its network authority; "
                 f"resume {required} --allow-network or use --mode replan"
+            )
+        stored_runtime = checkpoint.values.get("model_runtime_fingerprint")
+        if stored_runtime != self.settings.model_runtime_fingerprint:
+            raise ValueError(
+                "Exact checkpoint resume must preserve its model and endpoint; "
+                "restore the original OpenAI-compatible configuration or use "
+                "--mode replan"
             )
 
         recursion_limit = self.criteria.max_research_iterations * 8 + 32

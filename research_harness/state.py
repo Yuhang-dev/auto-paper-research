@@ -48,4 +48,5 @@ class ResearchState(TypedDict, total=False):
     no_progress_rounds: int
     tool_calls: int
     allow_network: bool
+    model_runtime_fingerprint: str
     stop_reason: str
