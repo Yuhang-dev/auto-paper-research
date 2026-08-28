@@ -1,9 +1,16 @@
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 .env
 .env.*
 !.env.example
+
+# Local release/test workspaces and build outputs
+dist/
+tmp/
 
 # Rebuildable Wiki Engine artifacts
 wiki/_generated/
@@ -11,7 +18,17 @@ error_book/_generated/
 
 # LangGraph checkpoints and research memory (always local on D:)
 .harness/
+*.db
+*.sqlite
+*.sqlite3
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite3-wal
 *.sqlite3-shm
+*.db-wal
+*.db-shm
+
+# Provider responses and acquired papers are runtime data. The tracked
+# LongLoRA seed PDF remains tracked for the existing offline fixture.
+research/**/search-runs/raw/
+sources/papers/**/*.pdf

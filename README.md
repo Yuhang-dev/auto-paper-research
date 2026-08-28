@@ -18,6 +18,7 @@
 - [`docs/PARAMETERS_AND_METRICS.md`](docs/PARAMETERS_AND_METRICS.md)：全部可调参数、计算指标、公式与内部限制
 - [`docs/CANARY_AND_EVALUATION.md`](docs/CANARY_AND_EVALUATION.md)：隔离联网测试、硬边界与分阶段验收
 - [`docs/DONE_CRITERIA_ACTIVATION_CHECKLIST.md`](docs/DONE_CRITERIA_ACTIVATION_CHECKLIST.md)：正式 DoneCriteria 激活前审核项
+- [`docs/RELEASE_V0.1.0_ALPHA1.md`](docs/RELEASE_V0.1.0_ALPHA1.md)：首个异机测试包的内容、安装、Canary 与已知限制
 
 第一轮检索计划见：
 
@@ -198,7 +199,7 @@ D:\anaconda3\python.exe -m pip install -r requirements-harness.txt
 
 当前锁定：LangChain 1.3.17、LangGraph 1.2.11、
 `langgraph-checkpoint-sqlite` 3.1.1、`langchain-openai` 1.6.0 和
-PyYAML 6.0.2、Pydantic 2.10.3。
+PyYAML 6.0.2、Pydantic 2.10.3、`deepxiv-sdk` 1.0.0 和 pypdf 6.16.2。
 
 ### Configure
 
@@ -444,7 +445,9 @@ conda run -n base python -B -m tools.wiki validate --strict
 ```
 
 普通 `validate` 在有 WARNING 时仍返回成功，只有 ERROR 会失败；`--strict`
-会让 WARNING 也导致非零退出码。V0.2 不包含 Writer、迁移器或自动修改源页面。
+会让 WARNING 也导致非零退出码。`tools.wiki` CLI 不暴露任意写入或迁移命令；
+Harness 的 ingest、verify 和 analyze 流程则会通过 guarded Writer 在 shadow validation
+通过后原子修改正式 Wiki 页面。
 
 ## DeepXiv environment
 
