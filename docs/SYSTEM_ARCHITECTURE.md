@@ -7,7 +7,7 @@ Research Harness 的内外循环设计。
 
 > 以 Markdown/YAML Wiki 为领域知识真源，以确定性 Python 工具完成搜索、
 > 解析、索引和校验，以 LangGraph 编排 Agent 工具循环与研究控制循环，
-> 并使用 D 盘 SQLite 保存 checkpoint 和显式研究记忆。
+> 并使用项目目录中的 SQLite 保存 checkpoint 和显式研究记忆。
 
 当前自动执行边界也需要先说明：
 
@@ -89,7 +89,7 @@ DeepXiv 搜索结果只能形成 candidate coverage。只有被摄取到 Wiki、
 | 工作流编排 | LangGraph 1.2 | Inner Tool Loop、Outer Research Loop、条件路由 |
 | Checkpoint | `langgraph-checkpoint-sqlite` | 保存 LangGraph thread checkpoint |
 | 跨线程记忆 | LangGraph `SqliteStore` | 保存显式、去重的研究笔记 |
-| 本地数据库 | SQLite | 同一 D 盘文件中保存 checkpoint 和 store 数据 |
+| 本地数据库 | SQLite | 同一持久化文件中保存 checkpoint 和 store 数据，盘符由用户选择 |
 | 数据契约 | Pydantic 2 | 严格验证 Snapshot、Gap、Decision、ActionResult、DoneCriteria |
 | 配置和过程记录 | PyYAML | Wiki frontmatter、schema、search-run、DoneCriteria |
 | 知识存储 | Markdown + YAML frontmatter | 人可读、Git 可审计的 Wiki 真源 |
@@ -141,7 +141,7 @@ flowchart TB
     I --> W
     I --> Y
 
-    Inner --> DB[(D-drive SQLite)]
+    Inner --> DB[(Persistent SQLite)]
     Outer --> DB
     MT --> DB
 ```
@@ -172,7 +172,7 @@ auto-paper-research/
 │   ├── tools.py                      LangChain Tool 封装
 │   ├── persistence.py                SQLite checkpoint/store
 │   ├── memory.py                     显式跨线程记忆
-│   ├── config.py                     配置与 D 盘约束
+│   ├── config.py                     配置与持久化路径校验
 │   ├── state.py                      LangGraph state/context
 │   ├── prompts.py                    Agent 系统规则
 │   ├── cli.py                        Harness CLI
@@ -237,13 +237,14 @@ auto-paper-research/
 输出长度。`resolve_database_path()` 会拒绝：
 
 - `:memory:`；
-- Windows `C:` 盘路径；
 - 非 `.db`、`.sqlite`、`.sqlite3` 后缀。
+
+数据库可以位于任意可写盘符；相对路径默认解析到当前仓库。
 
 默认 SQLite 位于：
 
 ```text
-D:/wiki-papersearch/.harness/research-harness.sqlite3
+<当前仓库>/.harness/research-harness.sqlite3
 ```
 
 ### 6.2 `state.py`：三种状态边界
@@ -415,7 +416,7 @@ Gap 路由规则：
 
 1. 只选择 `review_state: selected-for-ingest` 的 candidate；
 2. 优先使用显式、安全的仓库相对 `local_pdf_path`；
-3. 对缺少本地源的 arXiv handoff，在网络获准后限制 host、大小、PDF header 和 D 盘目标目录获取；
+3. 对缺少本地源的 arXiv handoff，在网络获准后限制 host、大小、PDF header 和项目内目标目录获取；
 4. 调用 `PaperIngestPipeline`，不让模型直接写 Markdown；批量首轮可用 deferred 模式跳过 Wiki catalog 注入；
 5. 若 `PaperIngestDraft` 校验失败，仅以原输出做一次有界 schema repair；无效输出、字段级错误和 repair 结果写入非发布 semantic artifact；
 6. 将实际模型调用数、repair 状态、变更页面和实体数写入 `ResearchActionResult`；
@@ -813,7 +814,7 @@ search-run 重新计算研究事实，避免 controller state 成为第二份知
 - 联网 Canary 另有父进程硬 deadline、provider call、candidate、paper 和 action 上限；
 - Canary 使用隔离 Wiki、Search Run、PDF、SQLite 与 semantic artifact 目录，并校验正式真源 hash 不变；
 - Tool 输出有字符上限并执行 Token 脱敏；
-- 自动论文源获取只允许 selected arXiv、approved HTTPS host、PDF header、大小上限和 D 盘目录；
+- 自动论文源获取只允许 selected arXiv、approved HTTPS host、PDF header、大小上限和项目内目录；
 - 不支持的动作返回结构化 blocked/unsupported；
 - draft DoneCriteria 永远不能自动 `finish`；
 - 负面检索结果与工具故障分别建模；

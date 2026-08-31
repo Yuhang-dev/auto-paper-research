@@ -126,9 +126,8 @@ count 等元数据仅用于导航和审计，不能替代带 locator 的 `Eviden
 Fast 模型处理规划、screening 和 Skim；Reasoning 模型处理深读、EvidenceCard、
 反证判断和 synthesis。旧的 `HARNESS_MODEL / HARNESS_MODEL_BASE_URL /
 OPENAI_API_KEY` 可作为 Fast 配置。标准运行缺少 Reasoning 配置会预检失败，只有
-显式 `--allow-single-model-fallback` 才退化。DeepSeek 官方 endpoint 继续只允许
-`openai:deepseek-v4-flash`；本地 OpenAI-compatible endpoint 使用其 `/v1/models`
-暴露的精确 ID。
+显式 `--allow-single-model-fallback` 才退化。所有 OpenAI-compatible endpoint 都使用
+服务端实际接受的精确模型 ID；Harness 不按 DeepSeek 等 endpoint 域名写死模型名。
 
 `run-config.yaml` 只记录两级模型 ID、base URL、是否实际发生单模型退化和非秘密
 fingerprint；API key 从不进入 config、artifact 或 SQLite checkpoint。

@@ -41,8 +41,8 @@
 - [ ] publication manifest 与 immutable artifact 分离；
 - [ ] 人工标注使用 `target_id + source_sha256` sidecar，不覆盖原始输出；
 - [ ] Key 仅存在进程环境；Wiki、YAML、SQLite、artifact、trajectory 和日志均无明文 Key；
-- [ ] OpenAI-compatible endpoint、served model ID 和能力探测结果已记录；若使用 DeepSeek 官方 endpoint，模型被限制为 `deepseek-v4-flash`；
-- [ ] SQLite、缓存、Canary 和 PDF 均位于 D 盘项目范围内。
+- [ ] OpenAI-compatible endpoint、served model ID 和能力探测结果已记录；模型可用性由目标服务端确认；
+- [ ] SQLite、缓存、Canary 和 PDF 均位于用户选择的可写项目或数据目录内。
 
 ## 激活动作
 

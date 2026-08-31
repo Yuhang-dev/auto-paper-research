@@ -60,7 +60,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="LangGraph orchestration for the LLM-Wiki research Harness."
     )
-    parser.add_argument("--db", type=Path, help="SQLite path; C: is rejected.")
+    parser.add_argument(
+        "--db",
+        type=Path,
+        help="Persistent SQLite path on any writable drive.",
+    )
     parser.add_argument(
         "--model",
         help="OpenAI-compatible model string, e.g. openai:<served-model-name>.",
@@ -482,7 +486,6 @@ def _doctor(settings: HarnessSettings, output_format: str) -> int:
         "repository_root": str(settings.repository_root),
         "database_path": str(path),
         "database_drive": path.drive,
-        "database_on_c": path.drive.casefold() == "c:",
         "database_exists": path.exists(),
         "database_bytes": path.stat().st_size if path.exists() else 0,
         "checkpoint_counts": checkpoint_counts,

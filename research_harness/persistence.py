@@ -17,7 +17,7 @@ from .config import HarnessSettings, resolve_database_path
 
 
 class HarnessPersistence:
-    """Own two SQLite connections to one D-drive database file."""
+    """Own two SQLite connections to one persistent database file."""
 
     def __init__(self, settings: HarnessSettings):
         self.settings = settings

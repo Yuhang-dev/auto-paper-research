@@ -108,10 +108,11 @@ Harness contract。
 DeepSeek 仍通过同一个 OpenAI-compatible client 使用：
 
 ```powershell
-$env:HARNESS_MODEL = "openai:deepseek-v4-flash"
+$env:HARNESS_MODEL = "openai:<DeepSeek 服务端接受的模型 ID>"
 $env:HARNESS_MODEL_BASE_URL = "https://api.deepseek.com"
 $env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
 ```
 
-当 endpoint host 属于 DeepSeek 官方域名时，配置层继续强制模型必须精确为
-`deepseek-v4-flash`。这个限制不会套用到 `localhost` 等本地 endpoint。
+配置层不会根据 endpoint 域名限制模型名。Harness 只校验 `openai:` adapter、非空
+served model ID 和显式 HTTP(S) base URL；模型是否存在及其结构化输出、tool calling
+能力由服务端响应和能力探测确定。

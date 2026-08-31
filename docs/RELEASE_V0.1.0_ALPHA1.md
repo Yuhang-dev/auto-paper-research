@@ -45,7 +45,7 @@
 论文摄取、14 个 Wiki entity 写入，正式 source of truth 保持不变。该 Canary 的
 `.harness` 工作区按发布策略不进入仓库或压缩包。
 
-## D 盘快速安装与离线检查
+## 快速安装与离线检查
 
 ```powershell
 $releaseRoot = "D:\auto-paper-research-v0.1.0-alpha.1"
@@ -59,7 +59,7 @@ D:\anaconda3\python.exe -B -m unittest discover -s skills\search-paper\scripts\t
 ```
 
 默认 SQLite 位于当前解压目录的 `.harness/`，无需设置 `HARNESS_DB_PATH`。若要覆盖，
-必须把它设为当前 D 盘 release 目录下的 `.db`、`.sqlite` 或 `.sqlite3` 路径，不能照抄
+必须把它设为任意可写盘符上的 `.db`、`.sqlite` 或 `.sqlite3` 持久化路径，且不要照抄
 其他 clone 的绝对路径。
 
 `requirements-harness.txt` 包含 `deepxiv-sdk==1.0.0`，不需要配置 DeepXiv MCP；

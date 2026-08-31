@@ -123,11 +123,11 @@ SQLite Checkpointer          单个 thread 的消息、工具调用与运行状�
 SQLite 默认位置：
 
 ```text
-D:\wiki-papersearch\.harness\research-harness.sqlite3
+<当前仓库>\.harness\research-harness.sqlite3
 ```
 
-配置层会拒绝任何位于 `C:` 的 `HARNESS_DB_PATH`。SQLite、WAL 和 SHM 文件均已
-加入 `.gitignore`。
+`HARNESS_DB_PATH` 可以位于任意可写盘符；配置层只要求使用持久化文件以及 `.db`、
+`.sqlite` 或 `.sqlite3` 后缀。SQLite、WAL 和 SHM 文件均已加入 `.gitignore`。
 
 模型上下文不是完整 checkpoint 历史，而是：
 
@@ -244,19 +244,20 @@ provider。`HARNESS_MODEL` 必须保留 `openai:` 前缀，冒号后是本地服
 `--allow-network`。不要把模型或 DeepXiv Key 写入 `.env`、YAML、SQLite research
 memory、命令参数或日志。
 
-若仍使用 DeepSeek 官方 endpoint：
+若使用 DeepSeek 官方 endpoint：
 
 ```powershell
-$env:HARNESS_MODEL = "openai:deepseek-v4-flash"
+$env:HARNESS_MODEL = "openai:<DeepSeek 服务端接受的模型 ID>"
 $env:HARNESS_MODEL_BASE_URL = "https://api.deepseek.com"
 $env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
 ```
 
-DeepSeek 官方域名继续强制只允许 `deepseek-v4-flash`。完整 endpoint 优先级、JSON
-mode 和 tool-calling 能力要求见 `docs/OPENAI_COMPATIBLE_MODEL.md`。
+Harness 不再按域名写死 DeepSeek 模型名；模型是否存在以及是否支持 JSON mode、
+tool calling 由目标服务端和运行前能力探测决定。完整 endpoint 优先级和能力要求见
+`docs/OPENAI_COMPATIBLE_MODEL.md`。
 
 DeepXiv SDK 只在获准的非 dry-run 调用中延迟导入；其 tiktoken 编码缓存默认
-定向到 `D:\wiki-papersearch\.harness\tiktoken-cache`，离线诊断和测试不会为了
+定向到 `<当前仓库>\.harness\tiktoken-cache`，离线诊断和测试不会为了
 导入 SDK 而联网。
 
 ### Run
@@ -378,7 +379,7 @@ node，并要求当前 `--allow-network` 与中断时的授权完全一致。已
 
 该命令会由 Harness 自己记录动作、工具调用和进展。候选筛选会把最多 3 个 core paper
 变为 `selected-for-ingest`。对选中的 arXiv candidate，在同一次 `--allow-network`
-授权下，Ingest 可以受控下载公共 PDF 到 D 盘仓库：
+授权下，Ingest 可以受控下载公共 PDF 到当前仓库：
 
 ```yaml
 local_pdf_path: sources/papers/arxiv-<id>.pdf

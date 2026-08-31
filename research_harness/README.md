@@ -7,8 +7,8 @@ program-controlled.
 
 ## Modules
 
-- `config.py`: environment configuration and the hard C-drive storage guard;
-- `persistence.py`: one D-drive SQLite file with separate checkpoint and store
+- `config.py`: environment configuration and persistent SQLite path validation;
+- `persistence.py`: one user-selected SQLite file with separate checkpoint and store
   connections in WAL/autocommit mode;
 - `state.py`: thread-scoped LangGraph state and immutable runtime context;
 - `memory.py`: explicit, deduplicated cross-thread research notes;
@@ -24,7 +24,7 @@ program-controlled.
 - `search_runtime.py`: Skill-conditioned gap query planning, structured candidate
   screening, deterministic selection, search-run validation, and atomic updates;
 - `paper_sources.py`: bounded acquisition of explicitly selected public arXiv
-  PDFs into the repository D-drive source directory;
+  PDFs into the repository source directory;
 - `evidence_verification.py`: PDF/source prechecks, structured semantic
   verification, guarded Wiki lifecycle transitions, and assessment verification;
 - `nonconsensus_analysis.py`: condition-aware comparison of verified claims and
@@ -71,8 +71,9 @@ D:\anaconda3\python.exe -B -m research_harness skills read search-paper referenc
 
 ## Safety boundaries
 
-- The default database is `.harness/research-harness.sqlite3` under this D-drive
-  repository. A C-drive path is rejected before SQLite opens it.
+- The default database is `.harness/research-harness.sqlite3` under the current
+  repository. An explicit path may use any writable drive; `:memory:` remains
+  disallowed because resumable checkpoints require persistent storage.
 - Ordinary Wiki query tools are read-only. Ingestion, verification, and
   assessment creation can write only through a guarded writer that validates an
   isolated shadow Wiki, atomically publishes source pages, rebuilds indexes, and
@@ -91,8 +92,8 @@ D:\anaconda3\python.exe -B -m research_harness skills read search-paper referenc
 - Secrets are read only from process environment variables and are never passed
   as tool arguments.
 - Configured model strings use `openai:<served-model-name>` and an explicit
-  OpenAI-compatible base URL. Official DeepSeek endpoints remain restricted to
-  `deepseek-v4-flash`.
+  OpenAI-compatible base URL. Model availability and capabilities are decided
+  by the configured server, not by endpoint-specific name allowlists.
 
 ## Persistence scopes
 
@@ -118,7 +119,7 @@ START
 
 `research step` is one diagnostic control pass. It reads
 the Markdown Wiki and search-run YAML, checkpoints compact control state in the
-same D-drive SQLite database under a research-specific thread prefix, and
+same SQLite database under a research-specific thread prefix, and
 returns a finite action. It does not yet execute the action.
 
 `research run` invokes the V1 loop:

@@ -61,7 +61,7 @@ def _positive_int(value: str, name: str, *, minimum: int, maximum: int) -> int:
 
 
 def resolve_database_path(value: Union[str, Path]) -> Path:
-    """Resolve a persistent SQLite file and reject storage on Windows C:."""
+    """Resolve a persistent SQLite file on any writable drive."""
 
     if str(value).strip() == ":memory:":
         raise ValueError("Harness persistence must use a file, not :memory:")
@@ -69,10 +69,6 @@ def resolve_database_path(value: Union[str, Path]) -> Path:
     if not raw_path.is_absolute():
         raw_path = REPOSITORY_ROOT / raw_path
     resolved = raw_path.resolve()
-    if resolved.drive.casefold() == "c:":
-        raise ValueError(
-            "HARNESS_DB_PATH cannot be on C:. Use the project D: drive or another data drive."
-        )
     if resolved.suffix.casefold() not in {".db", ".sqlite", ".sqlite3"}:
         raise ValueError("HARNESS_DB_PATH must end in .db, .sqlite, or .sqlite3")
     return resolved
@@ -172,13 +168,6 @@ class HarnessSettings:
                     "HARNESS_MODEL_BASE_URL, OPENAI_API_BASE, or OPENAI_BASE_URL "
                     "is required when HARNESS_MODEL is configured"
                 )
-            if (
-                self.is_deepseek_endpoint
-                and self.openai_model_name != "deepseek-v4-flash"
-            ):
-                raise ValueError(
-                    "The DeepSeek endpoint permits only deepseek-v4-flash"
-                )
         if not self.wiki_root.is_dir():
             raise FileNotFoundError(f"Wiki root does not exist: {self.wiki_root}")
         if not self.wiki_meta_root.is_dir():
@@ -213,11 +202,6 @@ class HarnessSettings:
         if not self.model_base_url:
             return None
         return urlparse(self.model_base_url).hostname
-
-    @property
-    def is_deepseek_endpoint(self) -> bool:
-        host = (self.model_endpoint_host or "").casefold().rstrip(".")
-        return host == "deepseek.com" or host.endswith(".deepseek.com")
 
     @property
     def normalized_model_base_url(self) -> Optional[str]:

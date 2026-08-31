@@ -75,7 +75,7 @@ DoneCriteria 按以下优先级解析：
 
 | 参数 | 类别 | 默认值 | 允许范围 / 约束 | 作用 |
 |---|---|---:|---|---|
-| `HARNESS_DB_PATH` / `--db` | A | `.harness/research-harness.sqlite3` | 必须是文件；扩展名 `.db`、`.sqlite` 或 `.sqlite3`；拒绝 `C:` 和 `:memory:` | LangGraph checkpoint 与跨 thread memory 的 SQLite 文件 |
+| `HARNESS_DB_PATH` / `--db` | A | `.harness/research-harness.sqlite3` | 任意可写盘符上的持久化文件；扩展名 `.db`、`.sqlite` 或 `.sqlite3`；拒绝 `:memory:` | LangGraph checkpoint 与跨 thread memory 的 SQLite 文件 |
 | `HARNESS_MODEL` / `--model` | A | 无 | 必须为 `openai:<served-model-name>` | 语义规划、筛选、论文抽取、验证、非共识分析使用的模型 |
 | `HARNESS_MODEL_BASE_URL` / `--model-base-url` | A | 无 | 绝对 HTTP(S) OpenAI-compatible API root；配置模型时必填 | 显式模型 endpoint，不允许隐式回退到 OpenAI 公网默认地址 |
 | `HARNESS_WORKSPACE_ID` / `--workspace` | A | `long-context-sparse-models` | 非空，最多 120 字符 | 跨 thread memory namespace |
@@ -83,17 +83,17 @@ DoneCriteria 按以下优先级解析：
 | `HARNESS_MAX_TOOL_ITERATIONS` | A | `6` | `1..30` 整数 | Inner Agent Loop 每轮最多经历多少次 tool-observe 循环；不控制 Outer Loop |
 | `HARNESS_TOOL_OUTPUT_CHARS` | A | `12000` | `1000..100000` 整数 | 每个 LangChain tool 返回给模型的 JSON 字符上限 |
 
-Harness 只使用 OpenAI-compatible adapter，但本地 endpoint 可以暴露任意明确的
-model ID。裸模型名和其他 provider 前缀会被拒绝。若 endpoint host 属于 DeepSeek
-官方域名，则仍只允许精确的 `openai:deepseek-v4-flash`。测试可通过构造器注入
-进程内 fake model，而不配置 socket endpoint。
+Harness 只使用 OpenAI-compatible adapter，但任意 endpoint 都可以暴露明确的
+model ID。裸模型名和其他 provider 前缀会被拒绝；具体模型是否可用由服务端判断，
+不再按 endpoint 域名写死模型名。测试可通过构造器注入进程内 fake model，而不配置
+socket endpoint。
 
 推荐配置：
 
 ```powershell
 $env:HARNESS_MODEL = "openai:<served-model-id>"
 $env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
-$env:HARNESS_DB_PATH = "D:/wiki-papersearch/.harness/research-harness.sqlite3"
+$env:HARNESS_DB_PATH = "C:/wiki-papersearch/.harness/research-harness.sqlite3"
 ```
 
 ### 3.2 凭证、适配器和运行环境
@@ -110,7 +110,7 @@ $env:HARNESS_DB_PATH = "D:/wiki-papersearch/.harness/research-harness.sqlite3"
 | `TAVILY_API_KEY` | A | 无 | Review Fast Loop 的 Web/官方项目页检索凭证；standard profile 必需 |
 | `GITHUB_TOKEN` | A | 无 | GitHub REST 凭证；可选，但 standard 正式运行建议配置以避免匿名限流 |
 | `LANGGRAPH_STRICT_MSGPACK` | A/F | `true` | 持久化兼容保护；`persistence.py` 只在未设置时写入 `true` |
-| `TIKTOKEN_CACHE_DIR` | A | `.harness/tiktoken-cache`（子进程 fallback） | 将 tokenizer 缓存保留在 D 盘项目目录 |
+| `TIKTOKEN_CACHE_DIR` | A | `.harness/tiktoken-cache`（子进程 fallback） | 将 tokenizer 缓存保留在当前项目目录 |
 | `PDFTOTEXT_PATH` | A | 自动发现 | `pypdf` 不可用时的 `pdftotext` 可执行文件路径 |
 | `PYTHONUTF8` | I | 子进程中强制 `1` | DeepXiv 子进程 UTF-8 输出保护 |
 | `DEEPSEEK_API_KEY` | F | 不使用 | 只会在异常消息中被脱敏；不是当前模型适配器的凭证变量 |

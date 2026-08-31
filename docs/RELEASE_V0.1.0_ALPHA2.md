@@ -19,8 +19,8 @@ Search planning、candidate screening、paper ingest、evidence verification、
 non-consensus claim analysis 和通用 LangGraph agent/tool loop 使用同一个连接
 contract。
 
-本地 endpoint 可以使用服务端实际暴露的任意模型 ID。DeepSeek 官方 endpoint
-仍只允许精确的 `deepseek-v4-flash`。
+所有 endpoint 都可以使用服务端实际接受的任意明确模型 ID；Harness 不再按
+DeepSeek 官方域名维护模型名白名单。
 
 ## 配置与安全变化
 
@@ -74,7 +74,7 @@ Windows、Conda base、Python 3.13.5 离线测试：
 | 模型 ID | `qwen2.5-32b-instruct` | 必须与 endpoint `/v1/models` 返回值完全一致 |
 | 模型 Key | 模型服务提供的 Key | 无鉴权服务也需要非空 sentinel |
 | DeepXiv Token | 注册获得的 Token | 仅联网论文检索需要 |
-| SQLite 路径 | 通常不填 | 默认位于当前 D 盘项目的 `.harness/` |
+| SQLite 路径 | 通常不填 | 默认位于当前项目的 `.harness/`，支持任意可写盘符 |
 
 不要把真实 Key 或 Token 写入 `.env.example`、README、YAML、命令参数或测试输出。
 

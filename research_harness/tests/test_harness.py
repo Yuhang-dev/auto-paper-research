@@ -85,14 +85,13 @@ class HarnessTestCase(unittest.TestCase):
 
 
 class ConfigurationAndPersistenceTests(HarnessTestCase):
-    def test_default_database_is_on_project_d_drive(self) -> None:
+    def test_default_database_is_inside_project(self) -> None:
         settings = HarnessSettings.from_env()
-        self.assertEqual("d:", settings.database_path.drive.casefold())
         self.assertTrue(str(settings.database_path).startswith(str(REPOSITORY_ROOT)))
 
-    def test_c_drive_database_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "cannot be on C"):
-            resolve_database_path(r"C:\research\memory.sqlite3")
+    def test_c_drive_database_is_allowed(self) -> None:
+        resolved = resolve_database_path(r"C:\research\memory.sqlite3")
+        self.assertEqual("c:", resolved.drive.casefold())
 
     def test_openai_compatible_local_model_configuration(self) -> None:
         settings = replace(
@@ -144,22 +143,15 @@ class ConfigurationAndPersistenceTests(HarnessTestCase):
                 model="openai:local-model",
                 model_base_url="http://user:password@localhost:8000/v1",
             ).validate()
-        with self.assertRaisesRegex(ValueError, "only deepseek-v4-flash"):
-            replace(
-                self.settings,
-                model="openai:another-model",
-                model_base_url="https://api.deepseek.com/v1",
-            ).validate()
-        with self.assertRaisesRegex(ValueError, "only deepseek-v4-flash"):
-            replace(
-                self.settings,
-                model="openai:another-model",
-                model_base_url="https://api.deepseek.com./v1",
-            ).validate()
         replace(
             self.settings,
-            model="openai:deepseek-v4-flash",
-            model_base_url="https://api.deepseek.com",
+            model="openai:deepseek-v4-pro",
+            model_base_url="https://api.deepseek.com/v1",
+        ).validate()
+        replace(
+            self.settings,
+            model="openai:another-served-model",
+            model_base_url="https://api.deepseek.com./v1",
         ).validate()
 
     def test_model_base_url_environment_contract(self) -> None:
