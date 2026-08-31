@@ -13,6 +13,7 @@ from unittest import mock
 from langchain_core.exceptions import OutputParserException
 
 from research_harness.config import HarnessSettings, REPOSITORY_ROOT
+from research_harness.cli import _review_state_payload
 from research_harness.evidence_verification import (
     EntityVerificationDecision,
     PaperVerificationDraft,
@@ -21,9 +22,14 @@ from research_harness.model_client import ReviewModelBundle
 from research_harness.review_control import ReviewController
 from research_harness.review_errorbook import aggregate_review_error_book
 from research_harness.review_logic import (
+    analyze_review_gaps,
+    build_review_coverage,
+    build_source_relation_candidates,
     merge_sources,
     sanitize_provisional_skim,
     select_for_deep_read,
+    select_for_skim,
+    search_saturated,
     source_evidence_eligible,
     validate_nonconsensus_assessment,
     web_source_authority,
@@ -38,6 +44,7 @@ from research_harness.review_models import (
     PromotionManifest,
     QueryPlan,
     ReasoningUpdate,
+    ResearchUncertainty,
     RetrievalQuery,
     ReviewErrorEvent,
     ReviewRunConfig,
@@ -47,6 +54,7 @@ from research_harness.review_models import (
     SourceMaterial,
     SourceScreening,
     SourceScreeningBatch,
+    SourceRelationHint,
     SourceSkim,
     SynthesisStatement,
     UnderstandingClaim,
@@ -59,7 +67,14 @@ from research_harness.review_providers import (
     _semantic_scholar_paper_details,
 )
 from research_harness.review_storage import ReviewArtifactStore
-from research_harness.review_semantics import _invoke_structured, _web_card_supported
+from research_harness.review_semantics import (
+    LangChainReviewSemanticEngine,
+    _invoke_structured,
+    _source_role_card_supported,
+    _web_card_supported,
+    build_promotion_manifest,
+)
+from research_harness.skill_registry import SkillRegistry
 
 
 NOW = "2026-08-31T00:00:00Z"
@@ -86,6 +101,36 @@ def _web_source(index: int, query_id: str = "R01Q01") -> SourceRecord:
         target_facets=FACETS,
         discoveries=(_discovery(query_id, index),),
         metadata={"source_authority": "official"},
+    )
+
+
+def _paper_source(
+    index: int,
+    *,
+    title: str | None = None,
+    year: int = 2025,
+    authors: tuple[str, ...] = ("Ada Example",),
+) -> SourceRecord:
+    arxiv_id = f"2501.{index:05d}"
+    return SourceRecord(
+        source_id=f"paper:arxiv:{arxiv_id}",
+        source_type="paper",
+        provider="deepxiv",
+        title=title or f"Sparse Attention Study {index}",
+        canonical_url=f"https://arxiv.org/abs/{arxiv_id}",
+        authors=authors,
+        year=year,
+        arxiv_id=arxiv_id,
+        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
+        target_facets=FACETS,
+        discoveries=(
+            DiscoveryRecord(
+                query_id="R01Q01",
+                provider="deepxiv",
+                rank=index,
+                retrieved_at=NOW,
+            ),
+        ),
     )
 
 
@@ -326,6 +371,23 @@ class ReviewLoopTests(unittest.TestCase):
             allow_network=False,
             allow_single_model_fallback=False,
             canary=True,
+            stop_after="synthesis",
+            created_at=NOW,
+        )
+
+    def _standard_config(self, run_id="standard-run", thread_id="standard-thread"):
+        return ReviewRunConfig.for_profile(
+            research_id=self.scope.research_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            profile="standard",
+            question=self.scope.question,
+            title=self.scope.title,
+            required_facets=self.scope.required_facets,
+            candidate_hypotheses=self.scope.candidate_hypotheses,
+            allow_network=False,
+            allow_single_model_fallback=False,
+            canary=False,
             stop_after="synthesis",
             created_at=NOW,
         )
@@ -784,6 +846,330 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertEqual(1, len(merged))
         self.assertEqual({"Q1", "Q2"}, {item.query_id for item in merged[0].discoveries})
 
+    def test_standard_selection_balances_source_roles_and_deep_read_caps(self):
+        config = self._standard_config()
+        role_plan = (
+            ["survey"] * 3
+            + ["primary-study"] * 7
+            + ["benchmark"] * 3
+            + ["reproduction"] * 2
+            + ["project"] * 3
+            + ["background"] * 4
+        )
+        sources = []
+        screenings = {}
+        skims = {}
+        for index, role in enumerate(role_plan, start=1):
+            if role == "project":
+                source = SourceRecord(
+                    source_id=f"project:fixture-{index}",
+                    source_type="project",
+                    provider="github",
+                    title=f"Fixture project {index}",
+                    canonical_url=f"https://github.com/example/fixture-{index}",
+                    repository=f"example/fixture-{index}",
+                    discoveries=(
+                        DiscoveryRecord(
+                            query_id="R01Q02",
+                            provider="github",
+                            rank=index,
+                            retrieved_at=NOW,
+                        ),
+                    ),
+                )
+            else:
+                title = (
+                    f"Sparse Attention Survey {index}"
+                    if role == "survey"
+                    else f"Sparse Attention Study {index}"
+                )
+                source = _paper_source(index, title=title)
+            sources.append(source)
+            screenings[source.source_id] = SourceScreening(
+                source_id=source.source_id,
+                source_role=role,
+                label="core" if role != "background" else "adjacent",
+                relevance_score=0.95 - index * 0.005,
+                evidence_potential=0.9,
+                engineering_value=0.8,
+                counterevidence_value=0.6,
+                reason="Balanced-role fixture for deterministic selection.",
+                target_facets=FACETS,
+            )
+            skims[source.source_id] = SourceSkim(
+                source_id=source.source_id,
+                source_type=source.source_type,
+                source_role=role,
+                label="core" if role != "background" else "adjacent",
+                relevance_score=0.9,
+                why_relevant="Balanced-role deep-read fixture.",
+                method_families=("sparse-attention",),
+                select_for_deep_read=True,
+                basis="abstract",
+            )
+
+        selected_skims = select_for_skim(sources, screenings, config)
+        selected_roles = [screenings[item].source_role for item in selected_skims]
+        for role, target in config.source_role_targets.items():
+            self.assertGreaterEqual(selected_roles.count(role), target)
+
+        deep_reads = select_for_deep_read(sources, skims, config)
+        deep_roles = [skims[item].source_role for item in deep_reads]
+        by_id = {item.source_id: item for item in sources}
+        self.assertEqual(10, len(deep_reads))
+        self.assertLessEqual(deep_roles.count("survey"), 2)
+        self.assertLessEqual(
+            sum(by_id[item].source_type != "paper" for item in deep_reads), 2
+        )
+        self.assertGreaterEqual(
+            sum(role in {"primary-study", "benchmark", "reproduction"} for role in deep_roles),
+            6,
+        )
+
+    def test_query_planner_targets_top_gaps_primary_papers_and_counterevidence(self):
+        config = self._standard_config()
+        gaps = tuple(
+            ResearchUncertainty(
+                uncertainty_id=f"gap:{index}",
+                question=f"Gap question {index}?",
+                category="coverage",
+                priority=priority,
+                next_queries=(f"gap query {index}",),
+                origin="deterministic",
+                target_facets=("technical-taxonomy",),
+                target_source_roles=("project",) if index == 1 else ("primary-study",),
+            )
+            for index, priority in enumerate((0.95, 0.90, 0.85, 0.40), start=1)
+        )
+        model = ScriptedStructuredModel(
+            [
+                QueryPlan(
+                    rationale="Target the supplied evidence gaps.",
+                    queries=(
+                        RetrievalQuery(
+                            id="draft",
+                            round=1,
+                            provider="tavily",
+                            text="generic sparse attention evidence",
+                            purpose="Locate evidence for an open gap.",
+                            uncertainty_id="gap:4",
+                        ),
+                    ),
+                )
+            ]
+        )
+        engine = object.__new__(LangChainReviewSemanticEngine)
+        engine.fast_model = model
+        engine.registry = SkillRegistry(self.settings.skills_root)
+        plan = engine.plan_queries(
+            scope=self.scope,
+            config=config,
+            round_number=1,
+            uncertainties=gaps,
+            prior_queries=(),
+            enabled_providers=("deepxiv", "github", "tavily"),
+        )
+        self.assertTrue(any(item.provider == "deepxiv" for item in plan.queries))
+        self.assertTrue(any(item.disconfirming for item in plan.queries))
+        self.assertTrue(any(item.provider == "github" for item in plan.queries))
+        self.assertTrue(
+            all(item.uncertainty_id in {"gap:1", "gap:2", "gap:3"} for item in plan.queries)
+        )
+
+    def test_fuzzy_same_work_is_a_candidate_and_never_auto_merged(self):
+        left = _paper_source(
+            1,
+            title="Dynamic Sparse Attention for Long Context",
+            year=2025,
+        )
+        right = _paper_source(
+            2,
+            title="Dynamic Sparse Attention for Long-Context",
+            year=2025,
+        )
+        skim = SourceSkim(
+            source_id=left.source_id,
+            source_type="paper",
+            source_role="primary-study",
+            label="core",
+            relevance_score=0.9,
+            why_relevant="Defines a reusable method relation.",
+            relation_hints=(
+                SourceRelationHint(
+                    subject="Method A",
+                    relation="extends",
+                    object="Method B",
+                    rationale="The source describes Method A as an extension.",
+                ),
+            ),
+            basis="abstract",
+        )
+        self.assertEqual(2, len(merge_sources((left, right))))
+        relations = build_source_relation_candidates((left, right), (skim,))
+        self.assertEqual(
+            {"possible-same-work", "extends"},
+            {item.relation for item in relations},
+        )
+        self.assertTrue(all(item.status == "candidate" for item in relations))
+        self.assertTrue(all(item.provisional for item in relations))
+
+    def test_gap_analyzer_uses_evidence_coverage_not_topology_alone(self):
+        source = _paper_source(1)
+        skim = SourceSkim(
+            source_id=source.source_id,
+            source_type="paper",
+            source_role="primary-study",
+            label="core",
+            relevance_score=0.9,
+            why_relevant="Defines the sparse-attention route.",
+            method_families=("dynamic-sparse-attention",),
+            target_facets=FACETS,
+            basis="abstract",
+        )
+        card = EvidenceCard(
+            card_id="card:taxonomy",
+            source_id=source.source_id,
+            source_url=source.canonical_url,
+            source_version="v1",
+            source_sha256="a" * 64,
+            statement="The source defines dynamic sparse attention.",
+            attribution="author",
+            evidence_type="author-discussion",
+            status="located",
+            method="dynamic-sparse-attention",
+            locator=EvidenceLocator(kind="pdf-page", value="2"),
+            target_facets=("technical-taxonomy",),
+        )
+        claim = UnderstandingClaim(
+            claim_id="claim:one-source",
+            statement="Dynamic selection changes the sparse pattern.",
+            scope=("dynamic-sparse-attention",),
+            confidence=0.6,
+            supporting_card_ids=(card.card_id,),
+            status="supported",
+        )
+        coverage = build_review_coverage(
+            required_facets=FACETS,
+            skims=(skim,),
+            cards=(card,),
+        )
+        gaps = analyze_review_gaps(
+            scope_title=self.scope.title,
+            required_facets=FACETS,
+            sources=(source,),
+            skims=(skim,),
+            cards=(card,),
+            claims=(claim,),
+            uncertainties=(),
+            assessments=(),
+            coverage=coverage,
+            current_year=2026,
+        )
+        by_kind = {item.kind: item for item in gaps}
+        self.assertEqual("partial", coverage.facets[0].status)
+        self.assertEqual("missing", coverage.facets[1].status)
+        self.assertEqual(0.95, by_kind["missing-facet"].priority)
+        self.assertEqual(0.85, by_kind["single-source-claim"].priority)
+        self.assertIn("method-evidence", by_kind)
+
+    def test_saturation_includes_independent_sources_facets_and_relations(self):
+        empty_gain = {
+            "new_method_families": 0,
+            "new_evidence_cards": 0,
+            "new_independent_sources": 0,
+            "new_covered_facets": 0,
+            "resolved_blocking_uncertainties": 0,
+            "independent_counterevidence": False,
+            "new_confirmed_topology_relations": 0,
+        }
+        self.assertTrue(search_saturated((empty_gain, empty_gain)))
+        self.assertFalse(
+            search_saturated(
+                (empty_gain, {**empty_gain, "new_independent_sources": 1})
+            )
+        )
+        self.assertFalse(
+            search_saturated(
+                (empty_gain, {**empty_gain, "new_covered_facets": 1})
+            )
+        )
+
+    def test_survey_quantitative_card_is_navigation_only(self):
+        quantitative = EvidenceCard(
+            card_id="card:survey-number",
+            source_id="paper:survey",
+            source_url="https://example.org/survey",
+            source_version="v1",
+            source_sha256="a" * 64,
+            statement="The survey reports latency from a cited study.",
+            attribution="author",
+            evidence_type="experiment",
+            status="located",
+            metric="latency",
+            value="10",
+            unit="ms",
+            conditions={"context": "32K"},
+            locator=EvidenceLocator(kind="pdf-page", value="4"),
+        )
+        qualitative = quantitative.model_copy(
+            update={
+                "card_id": "card:survey-taxonomy",
+                "statement": "The survey groups methods by sparse pattern.",
+                "evidence_type": "author-discussion",
+                "metric": None,
+                "value": None,
+                "unit": None,
+                "conditions": {},
+            }
+        )
+        self.assertFalse(_source_role_card_supported(quantitative, "survey"))
+        self.assertTrue(_source_role_card_supported(qualitative, "survey"))
+
+    def test_promotion_requires_report_citation_and_skips_existing_wiki_identity(self):
+        config = self._standard_config()
+        source = _paper_source(1).model_copy(update={"local_path": "papers/one.pdf"})
+        card = EvidenceCard(
+            card_id="card:report",
+            source_id=source.source_id,
+            source_url=source.canonical_url,
+            source_version="v1",
+            source_sha256="a" * 64,
+            statement="The paper reports a located result.",
+            attribution="author",
+            evidence_type="author-discussion",
+            status="located",
+            locator=EvidenceLocator(kind="pdf-page", value="3"),
+            target_facets=("technical-taxonomy",),
+        )
+        draft = ReviewSynthesisDraft(
+            title="Fixture",
+            scope_summary="Fixture",
+            core_findings=(
+                SynthesisStatement(
+                    statement_id="finding:report",
+                    statement="A report-critical observation.",
+                    evidence_card_ids=(card.card_id,),
+                ),
+            ),
+        )
+        manifest = build_promotion_manifest(
+            config=config,
+            sources=(source,),
+            cards=(card,),
+            created_at=NOW,
+            draft=draft,
+        )
+        self.assertEqual((source.source_id,), tuple(item.source_id for item in manifest.items))
+        skipped = build_promotion_manifest(
+            config=config,
+            sources=(source,),
+            cards=(card,),
+            created_at=NOW,
+            draft=draft,
+            existing_paper_identities=(f"arxiv:{source.arxiv_id}",),
+        )
+        self.assertEqual((), skipped.items)
+
     def test_same_paper_configurations_cannot_be_cross_paper_consensus(self):
         digest = "a" * 64
         cards = {
@@ -886,6 +1272,15 @@ class ReviewLoopTests(unittest.TestCase):
         report = store.report_path.read_text(encoding="utf-8")
         self.assertIn("## 10. 证据索引", report)
         self.assertIn("[E1](#e1)", report)
+        self.assertTrue(store.technology_map_path.is_file())
+        self.assertTrue(store.coverage_path.is_file())
+        self.assertTrue(store.gaps_path.is_file())
+        self.assertIn("provisional_concepts", store.technology_map())
+        self.assertIsNotNone(store.coverage())
+        status = _review_state_payload(state, store)
+        self.assertIn("facet_coverage", status["research_map"])
+        self.assertIn("top_unresolved_gaps", status["research_map"])
+        self.assertIn("coverage_matrix", status["paths"])
         self.assertEqual(wiki_before, (self.root / "wiki" / "sentinel.md").read_bytes())
 
     def test_manual_synthesis_refreshes_reasoning_after_deep_read_stop(self):

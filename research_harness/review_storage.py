@@ -21,7 +21,9 @@ from .review_models import (
     QueryPlan,
     ResearchUncertainty,
     RetrievalQuery,
+    ReviewCoverageMatrix,
     ReviewErrorEvent,
+    ReviewGap,
     ReviewReadiness,
     ReviewRunConfig,
     ReviewScope,
@@ -266,6 +268,18 @@ class ReviewArtifactStore:
         return self.delivery_root / "promotion-manifest.yaml"
 
     @property
+    def technology_map_path(self) -> Path:
+        return self.delivery_root / "technology-map.yaml"
+
+    @property
+    def coverage_path(self) -> Path:
+        return self.delivery_root / "coverage-matrix.yaml"
+
+    @property
+    def gaps_path(self) -> Path:
+        return self.delivery_root / "research-gaps.yaml"
+
+    @property
     def report_path(self) -> Path:
         return self.delivery_root / "review.md"
 
@@ -408,7 +422,38 @@ class ReviewArtifactStore:
         _atomic_text(self.report_path, content.rstrip() + "\n")
 
     def write_technology_map(self, payload: Mapping[str, Any]) -> None:
-        _atomic_yaml(self.delivery_root / "technology-map.yaml", payload)
+        _atomic_yaml(self.technology_map_path, payload)
+
+    def technology_map(self) -> dict[str, Any]:
+        if not self.technology_map_path.is_file():
+            return {}
+        payload = yaml.safe_load(
+            self.technology_map_path.read_text(encoding="utf-8-sig")
+        ) or {}
+        if not isinstance(payload, dict):
+            raise ValueError("technology-map.yaml must contain a mapping")
+        return payload
+
+    def write_coverage(self, coverage: ReviewCoverageMatrix) -> None:
+        _atomic_yaml(self.coverage_path, coverage)
+
+    def coverage(self) -> Optional[ReviewCoverageMatrix]:
+        if not self.coverage_path.is_file():
+            return None
+        return ReviewCoverageMatrix.model_validate(
+            yaml.safe_load(self.coverage_path.read_text(encoding="utf-8-sig")) or {}
+        )
+
+    def write_gaps(self, gaps: Sequence[ReviewGap]) -> None:
+        _atomic_yaml(self.gaps_path, [item.model_dump(mode="json") for item in gaps])
+
+    def gaps(self) -> tuple[ReviewGap, ...]:
+        if not self.gaps_path.is_file():
+            return ()
+        payload = yaml.safe_load(self.gaps_path.read_text(encoding="utf-8-sig")) or []
+        if not isinstance(payload, list):
+            raise ValueError("research-gaps.yaml must contain a list")
+        return tuple(ReviewGap.model_validate(item) for item in payload)
 
     def write_promotion_manifest(self, manifest: PromotionManifest) -> None:
         _atomic_yaml(self.promotion_path, manifest)

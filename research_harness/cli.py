@@ -1207,8 +1207,28 @@ def _review_state_payload(
             if store.promotion_path.is_file()
             else None
         ),
+        "technology_map": (
+            store.relative(store.technology_map_path)
+            if store.technology_map_path.is_file()
+            else None
+        ),
+        "coverage_matrix": (
+            store.relative(store.coverage_path)
+            if store.coverage_path.is_file()
+            else None
+        ),
+        "research_gaps": (
+            store.relative(store.gaps_path) if store.gaps_path.is_file() else None
+        ),
     }
     report_exists = store.report_path.is_file()
+    role_counts: Dict[str, int] = {}
+    for skim in store.skims():
+        role_counts[skim.source_role] = role_counts.get(skim.source_role, 0) + 1
+    coverage = store.coverage()
+    gaps = tuple(item for item in store.gaps() if item.status == "open")
+    technology_map = store.technology_map()
+    relation_candidates = technology_map.get("relation_candidates", [])
     return {
         "schema_version": "review-status-0.1",
         "research_id": store.config.research_id,
@@ -1235,6 +1255,26 @@ def _review_state_payload(
             "promotion_limit": store.config.max_promotions,
         },
         "readiness": readiness.model_dump(mode="json") if readiness else None,
+        "research_map": {
+            "source_role_counts": dict(sorted(role_counts.items())),
+            "facet_coverage": (
+                {
+                    item.facet: {
+                        "status": item.status,
+                        "independent_sources": len(item.independent_source_ids),
+                        "evidence_cards": len(item.evidence_card_ids),
+                    }
+                    for item in coverage.facets
+                }
+                if coverage
+                else {}
+            ),
+            "top_unresolved_gaps": [
+                item.model_dump(mode="json") for item in gaps[:5]
+            ],
+            "relation_candidates": len(relation_candidates),
+            "next_recommended_pivot": gaps[0].question if gaps else None,
+        },
         "run_local_errors": len(store.error_events()),
         "paths": paths,
         "fast_loop_wiki_written": False,

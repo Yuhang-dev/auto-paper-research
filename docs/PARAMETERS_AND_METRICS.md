@@ -141,6 +141,10 @@ V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 
 | `max_skims` | I | 4 | 20 |
 | `max_deep_reads` | I | 2 | 10 |
 | `minimum_deep_read_papers` | I | 2 | 6 |
+| `minimum_core_study_deep_reads` | I | 0 | 6 |
+| `max_survey_deep_reads` | I | 2 | 2 |
+| `max_nonpaper_deep_reads` | I | 2 | 2 |
+| source role soft targets | I | 无 | survey 2 / primary 6 / benchmark 2 / reproduction 1 / project 2 |
 | `max_promotions` | I | 0 | 6 |
 | paper / project / web soft quota | I | 5 / 1 / 2 | 30 / 10 / 10 |
 | `max_search_rounds` | I | 1 | 3 |
@@ -163,11 +167,27 @@ Review readiness 是计算结果，不可通过 YAML 直接填写：
 | `independent_sources` | C | Evidence Pool 中唯一 source ID 数 |
 | `unresolved_blocking_ids` | C | 仍为 open 且 blocking 的 uncertainty |
 | `nonconsensus_review_complete` | C | 已产生合法 assessment，或范围没有非共识问题 |
-| `saturated` | C | 连续两轮无新路线、卡片、blocking resolution 和独立反证 |
+| `saturated` | C | 连续两轮无新路线、卡片、独立来源、covered facet、blocking resolution、独立反证和确认关系 |
 | `ready` | C | facet/evidence/uncertainty/nonconsensus/saturation 的组合判断 |
 
 Review profile 达到预算但 `ready=false` 时仍生成有界综述，并把缺口写入报告；不会
 伪造完成状态。旧 `DoneCriteria` 继续服务 Durable Evidence Loop，不控制 Fast Loop。
+
+Fast Review Gap Analyzer 使用固定内部优先级；report-critical gap 额外加 `0.05`，
+上限为 `1.00`：
+
+| Review gap | 基础 priority |
+|---|---:|
+| blocking uncertainty | 1.00 |
+| missing required facet | 0.90 |
+| single-source claim | 0.80 |
+| incomparable evidence | 0.75 |
+| missing method engineering/failure evidence | 0.70 |
+| orphan provisional concept | 0.60 |
+| stale evidence | 0.50 |
+
+这些常量属于实现参数。`research-gaps.yaml` 保存每轮实际生成的 gap、来源、目标
+facet/source role 和推荐 Query。
 
 ### 3.4 SQLite 固定参数
 

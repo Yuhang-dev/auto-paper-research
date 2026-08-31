@@ -18,6 +18,10 @@ from .config import HarnessSettings
 from .model_client import ReviewModelBundle
 from .persistence import HarnessPersistence
 from .review_logic import (
+    analyze_review_gaps,
+    build_review_coverage,
+    formal_wiki_paper_identities,
+    merge_gap_uncertainties,
     merge_sources,
     review_readiness,
     search_saturated,
@@ -218,6 +222,64 @@ def _normalized_text(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
+def _query_signature(query) -> tuple[str, str, str]:
+    return (
+        query.provider,
+        _normalized_text(query.text),
+        str(query.uncertainty_id or ""),
+    )
+
+
+def _refresh_review_analysis(
+    *,
+    scope: ReviewScope,
+    store: ReviewArtifactStore,
+    claims: Sequence[UnderstandingClaim],
+    uncertainties: Sequence[ResearchUncertainty],
+    assessments: Sequence[NonConsensusAssessment],
+) -> tuple[ResearchUncertainty, ...]:
+    sources = store.sources()
+    skims = store.skims()
+    cards = store.cards()
+    technology_map = build_technology_map(
+        sources=sources,
+        skims=skims,
+        cards=cards,
+    )
+    prior_relation_status = {
+        str(item.get("relation_id")): str(item.get("status"))
+        for item in store.technology_map().get("relation_candidates", [])
+        if isinstance(item, Mapping)
+        and item.get("status") in {"confirmed", "rejected"}
+    }
+    for relation in technology_map.get("relation_candidates", []):
+        relation_id = str(relation.get("relation_id") or "")
+        if relation_id in prior_relation_status:
+            relation["status"] = prior_relation_status[relation_id]
+    coverage = build_review_coverage(
+        required_facets=scope.required_facets,
+        skims=skims,
+        cards=cards,
+    )
+    gaps = analyze_review_gaps(
+        scope_title=scope.title,
+        required_facets=scope.required_facets,
+        sources=sources,
+        skims=skims,
+        cards=cards,
+        claims=claims,
+        uncertainties=uncertainties,
+        assessments=assessments,
+        coverage=coverage,
+    )
+    merged_uncertainties = merge_gap_uncertainties(uncertainties, gaps)
+    store.write_technology_map(technology_map)
+    store.write_coverage(coverage)
+    store.write_gaps(gaps)
+    store.write_uncertainties(merged_uncertainties)
+    return merged_uncertainties
+
+
 def _merge_reasoning(
     *,
     update: ReasoningUpdate,
@@ -263,6 +325,9 @@ def _merge_reasoning(
         uncertainty_id = uncertainty_texts.get(
             _normalized_text(raw.question), raw.uncertainty_id
         )
+        current = uncertainties.get(uncertainty_id)
+        if current is not None and current.origin == "deterministic":
+            continue
         supporting = tuple(item for item in raw.supporting_card_ids if item in known_cards)
         opposing = tuple(item for item in raw.opposing_card_ids if item in known_cards)
         normalized = raw.model_copy(
@@ -276,7 +341,7 @@ def _merge_reasoning(
         uncertainty_texts[_normalized_text(normalized.question)] = uncertainty_id
     for uncertainty_id in update.resolved_uncertainty_ids:
         current = uncertainties.get(uncertainty_id)
-        if current is not None:
+        if current is not None and current.origin != "deterministic":
             uncertainties[uncertainty_id] = current.model_copy(
                 update={
                     "status": "resolved",
@@ -460,11 +525,11 @@ def build_review_graph(
             prior_queries=prior_queries,
             enabled_providers=providers.names,
         )
-        signatures = {_normalized_text(item.text) for item in prior_queries}
+        signatures = {_query_signature(item) for item in prior_queries}
         queries = tuple(
             item
             for item in plan.queries
-            if _normalized_text(item.text) not in signatures
+            if _query_signature(item) not in signatures
         )
         remaining_query_budget = max(0, config.max_queries - len(prior_queries))
         queries = queries[:remaining_query_budget]
@@ -510,6 +575,17 @@ def build_review_graph(
             for item in store.uncertainties()
             if item.blocking and item.status == "open"
         }
+        coverage = store.coverage()
+        covered_facets = {
+            item.facet for item in coverage.facets if item.status == "covered"
+        } if coverage else set()
+        evidence_sources = {item.source_id for item in store.cards()}
+        technology_map = store.technology_map()
+        confirmed_relations = {
+            str(item.get("relation_id"))
+            for item in technology_map.get("relation_candidates", [])
+            if isinstance(item, Mapping) and item.get("status") == "confirmed"
+        }
         sequence = _append_trajectory(
             store,
             state,
@@ -537,6 +613,9 @@ def build_review_graph(
                 "cards": len(store.cards()),
                 "method_families": sorted(method_families),
                 "blocking_open": sorted(blocking_open),
+                "evidence_sources": sorted(evidence_sources),
+                "covered_facets": sorted(covered_facets),
+                "confirmed_relations": sorted(confirmed_relations),
             },
             "trajectory_sequence": sequence,
         }
@@ -588,6 +667,7 @@ def build_review_graph(
 
     def skim(state: ReviewState) -> Dict[str, Any]:
         sources = {item.source_id: item for item in store.sources()}
+        screenings = {item.source_id: item for item in store.screenings()}
         existing = {item.source_id: item for item in store.skims()}
         selected = tuple(state.get("selected_skim_ids") or ())
         pending = [sources[item] for item in selected if item in sources and item not in existing]
@@ -598,6 +678,11 @@ def build_review_graph(
                         semantic_engine.skim_source,
                         scope=scope,
                         source=source,
+                        source_role=(
+                            screenings[source.source_id].source_role
+                            if source.source_id in screenings
+                            else "background"
+                        ),
                     ): source
                     for source in pending
                 }
@@ -623,9 +708,17 @@ def build_review_graph(
             action=f"Completed {len(existing)} provisional skims; none are citation evidence.",
             evidence_gained=tuple(sorted(existing)),
         )
+        uncertainties = _refresh_review_analysis(
+            scope=scope,
+            store=store,
+            claims=store.claims(),
+            uncertainties=store.uncertainties(),
+            assessments=store.assessments(),
+        )
         return {
             "phase": "reasoning",
             "skim_ids": sorted(existing),
+            "uncertainty_ids": [item.uncertainty_id for item in uncertainties],
             "trajectory_sequence": sequence,
         }
 
@@ -662,6 +755,13 @@ def build_review_graph(
                 observed=f"{type(exc).__name__}: {exc}",
             )
             summary = "Understanding update failed; retained previous state."
+        uncertainties = _refresh_review_analysis(
+            scope=scope,
+            store=store,
+            claims=claims,
+            uncertainties=uncertainties,
+            assessments=assessments,
+        )
         sequence = _append_trajectory(
             store,
             state,
@@ -800,6 +900,11 @@ def build_review_graph(
                         source=source,
                         material=store.material(source.source_id),
                         claims=store.claims(),
+                        source_role=(
+                            skims[source.source_id].source_role
+                            if source.source_id in skims
+                            else "background"
+                        ),
                     ): source
                     for source in pending
                 }
@@ -820,6 +925,13 @@ def build_review_graph(
                     store.write_cards(tuple(cards.values()))
                     store.mark_deep_read_completed(source.source_id)
         completed = set(store.deep_read_completed())
+        uncertainties = _refresh_review_analysis(
+            scope=scope,
+            store=store,
+            claims=store.claims(),
+            uncertainties=store.uncertainties(),
+            assessments=store.assessments(),
+        )
         sequence = _append_trajectory(
             store,
             state,
@@ -835,6 +947,7 @@ def build_review_graph(
             "selected_deep_read_ids": list(selected),
             "deep_read_ids": sorted(completed),
             "evidence_card_ids": sorted(cards),
+            "uncertainty_ids": [item.uncertainty_id for item in uncertainties],
             "trajectory_sequence": sequence,
         }
 
@@ -870,6 +983,13 @@ def build_review_graph(
                 recurrence_key="review-assessment:structured-output",
                 observed=f"{type(exc).__name__}: {exc}",
             )
+        uncertainties = _refresh_review_analysis(
+            scope=scope,
+            store=store,
+            claims=claims,
+            uncertainties=uncertainties,
+            assessments=assessments,
+        )
         start = state.get("round_start") or {}
         current_families = {
             family for skim in store.skims() for family in skim.method_families
@@ -881,13 +1001,36 @@ def build_review_graph(
             for item in uncertainties
             if item.blocking and item.status == "open"
         }
+        current_evidence_sources = {item.source_id for item in store.cards()}
+        previous_evidence_sources = set(start.get("evidence_sources") or [])
+        coverage = store.coverage()
+        current_covered_facets = {
+            item.facet for item in coverage.facets if item.status == "covered"
+        } if coverage else set()
+        previous_covered_facets = set(start.get("covered_facets") or [])
+        technology_map = store.technology_map()
+        current_confirmed_relations = {
+            str(item.get("relation_id"))
+            for item in technology_map.get("relation_candidates", [])
+            if isinstance(item, Mapping) and item.get("status") == "confirmed"
+        }
+        previous_confirmed_relations = set(start.get("confirmed_relations") or [])
         gain = {
             "round": int(state.get("round_number") or 0),
             "new_method_families": len(current_families - previous_families),
             "new_evidence_cards": max(0, len(store.cards()) - int(start.get("cards") or 0)),
+            "new_independent_sources": len(
+                current_evidence_sources - previous_evidence_sources
+            ),
+            "new_covered_facets": len(
+                current_covered_facets - previous_covered_facets
+            ),
             "resolved_blocking_uncertainties": len(previous_blocking - current_blocking),
             "independent_counterevidence": bool(
                 update and update.found_independent_counterevidence
+            ),
+            "new_confirmed_topology_relations": len(
+                current_confirmed_relations - previous_confirmed_relations
             ),
         }
         gains = (*store.round_gains(), gain)
@@ -946,23 +1089,33 @@ def build_review_graph(
         }
 
     def synthesize(state: ReviewState) -> Dict[str, Any]:
-        readiness = store.readiness() or review_readiness(
+        claims = store.claims()
+        assessments = store.assessments()
+        uncertainties = _refresh_review_analysis(
+            scope=scope,
+            store=store,
+            claims=claims,
+            uncertainties=store.uncertainties(),
+            assessments=assessments,
+        )
+        readiness = review_readiness(
             required_facets=scope.required_facets,
             cards=store.cards(),
-            claims=store.claims(),
-            uncertainties=store.uncertainties(),
-            assessments=store.assessments(),
+            claims=claims,
+            uncertainties=uncertainties,
+            assessments=assessments,
             saturated=search_saturated(store.round_gains()),
         )
+        store.write_readiness(readiness)
         try:
             draft = semantic_engine.synthesize(
                 scope=scope,
                 config=config,
                 sources=store.sources(),
                 cards=store.cards(),
-                claims=store.claims(),
-                uncertainties=store.uncertainties(),
-                assessments=store.assessments(),
+                claims=claims,
+                uncertainties=uncertainties,
+                assessments=assessments,
                 readiness=readiness,
             )
         except Exception as exc:
@@ -985,14 +1138,18 @@ def build_review_graph(
                 ),
             )
         store.write_synthesis_draft(draft)
-        store.write_technology_map(
-            build_technology_map(skims=store.skims(), cards=store.cards())
-        )
         manifest = build_promotion_manifest(
             config=config,
             sources=store.sources(),
             cards=store.cards(),
             created_at=_utc_now(),
+            draft=draft,
+            claims=claims,
+            uncertainties=uncertainties,
+            assessments=assessments,
+            existing_paper_identities=formal_wiki_paper_identities(
+                store.settings.wiki_root
+            ),
         )
         store.write_promotion_manifest(manifest)
         report = render_review_markdown(
@@ -1287,6 +1444,13 @@ class ReviewController:
                 recurrence_key="review-assessment:manual-synthesis",
                 observed=f"{type(exc).__name__}: {exc}",
             )
+        uncertainties = _refresh_review_analysis(
+            scope=self.scope,
+            store=self.store,
+            claims=claims,
+            uncertainties=uncertainties,
+            assessments=assessments,
+        )
         readiness = review_readiness(
             required_facets=self.scope.required_facets,
             cards=cards,
@@ -1316,14 +1480,18 @@ class ReviewController:
             )
             raise
         self.store.write_synthesis_draft(draft)
-        self.store.write_technology_map(
-            build_technology_map(skims=self.store.skims(), cards=self.store.cards())
-        )
         manifest = build_promotion_manifest(
             config=self.config,
             sources=self.store.sources(),
             cards=self.store.cards(),
             created_at=_utc_now(),
+            draft=draft,
+            claims=claims,
+            uncertainties=uncertainties,
+            assessments=assessments,
+            existing_paper_identities=formal_wiki_paper_identities(
+                self.store.settings.wiki_root
+            ),
         )
         self.store.write_promotion_manifest(manifest)
         sequence = _append_trajectory(

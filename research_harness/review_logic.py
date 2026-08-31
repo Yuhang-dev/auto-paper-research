@@ -6,16 +6,26 @@ import hashlib
 import json
 import re
 from collections import defaultdict
-from typing import Iterable, Mapping, Sequence, Tuple, TypeVar
+from datetime import datetime, timezone
+from difflib import SequenceMatcher
+from itertools import combinations
+from pathlib import Path
+from typing import Iterable, Mapping, Optional, Sequence, Tuple, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+import yaml
 
 from .review_models import (
     EvidenceCard,
+    FacetCoverage,
     NonConsensusAssessment,
     ResearchUncertainty,
+    ReviewCoverageMatrix,
+    ReviewGap,
     ReviewReadiness,
     ReviewRunConfig,
     SourceRecord,
+    SourceRelationCandidate,
     SourceScreening,
     SourceSkim,
     SourceType,
@@ -65,6 +75,17 @@ UNVERIFIED_QUANTITATIVE_FINDING = re.compile(
     re.IGNORECASE,
 )
 SURVEY_TITLE = re.compile(r"\bsurvey\b|\bsystematic review\b", re.IGNORECASE)
+CORE_STUDY_ROLES = frozenset({"primary-study", "benchmark", "reproduction"})
+ENGINEERING_FACETS = frozenset(
+    {
+        "latency-throughput",
+        "memory-and-kv-cache",
+        "kernels-and-hardware",
+        "open-source-implementations",
+        "limitations-and-counter-evidence",
+        "prefill-vs-decode",
+    }
+)
 T = TypeVar("T")
 
 
@@ -383,6 +404,46 @@ def select_for_skim(
             continue
         ranked.append((screening.ranking_score, source, source_id))
     ranked.sort(key=lambda item: (-item[0], source_identity(item[1]), item[2]))
+    if config.source_role_targets:
+        type_limits = _type_limits(config.max_skims, config)
+        selected: list[tuple[float, SourceRecord, str]] = []
+        selected_ids: set[str] = set()
+        type_counts: dict[SourceType, int] = defaultdict(int)
+
+        def admit(item: tuple[float, SourceRecord, str]) -> bool:
+            _, source, source_id = item
+            if source_id in selected_ids:
+                return False
+            if type_counts[source.source_type] >= type_limits[source.source_type]:
+                return False
+            selected.append(item)
+            selected_ids.add(source_id)
+            type_counts[source.source_type] += 1
+            return True
+
+        for role, target in config.source_role_targets.items():
+            admitted = 0
+            for item in ranked:
+                source = item[1]
+                screening = screenings[item[2]]
+                effective_role = (
+                    "project" if source.source_type == "project" else screening.source_role
+                )
+                if effective_role == role and admit(item):
+                    admitted += 1
+                    if admitted >= target:
+                        break
+        for item in ranked:
+            if len(selected) >= config.max_skims:
+                break
+            admit(item)
+        for item in ranked:
+            if len(selected) >= config.max_skims:
+                break
+            if item[2] not in selected_ids:
+                selected.append(item)
+                selected_ids.add(item[2])
+        return tuple(item[2] for item in selected[: config.max_skims])
     return _stratified_select(ranked, limit=config.max_skims, config=config)
 
 
@@ -402,24 +463,72 @@ def select_for_deep_read(
             or not source_evidence_eligible(source)
         ):
             continue
+        role = "project" if source.source_type == "project" else skim.source_role
         score = skim.relevance_score + 0.2
         score += min(len(skim.target_facets), 5) * 0.01
         if source_is_survey(source):
             score -= 0.25
-        ranked.append((score, source, source_id))
+        ranked.append((score, source, source_id, role))
     ranked.sort(key=lambda item: (-item[0], source_identity(item[1]), item[2]))
+    if config.minimum_core_study_deep_reads:
+        selected: list[tuple[float, SourceRecord, str, str]] = []
+        selected_ids: set[str] = set()
+        survey_count = 0
+        nonpaper_count = 0
+
+        def admit(
+            item: tuple[float, SourceRecord, str, str], *, enforce_caps: bool = True
+        ) -> bool:
+            nonlocal survey_count, nonpaper_count
+            _, source, source_id, role = item
+            if source_id in selected_ids:
+                return False
+            if enforce_caps and role == "survey" and survey_count >= config.max_survey_deep_reads:
+                return False
+            if (
+                enforce_caps
+                and source.source_type != "paper"
+                and nonpaper_count >= config.max_nonpaper_deep_reads
+            ):
+                return False
+            selected.append(item)
+            selected_ids.add(source_id)
+            survey_count += int(role == "survey")
+            nonpaper_count += int(source.source_type != "paper")
+            return True
+
+        core_target = min(
+            config.minimum_core_study_deep_reads,
+            config.max_deep_reads,
+        )
+        for item in ranked:
+            if len(selected) >= core_target:
+                break
+            if item[1].source_type == "paper" and item[3] in CORE_STUDY_ROLES:
+                admit(item)
+        for item in ranked:
+            if len(selected) >= config.max_deep_reads:
+                break
+            admit(item)
+        for item in ranked:
+            if len(selected) >= config.max_deep_reads:
+                break
+            admit(item, enforce_caps=False)
+        return tuple(item[2] for item in selected[: config.max_deep_reads])
     required_papers = min(
         config.minimum_deep_read_papers,
         config.max_deep_reads,
     )
-    selected = [
-        item for item in ranked if item[1].source_type == "paper"
-    ][:required_papers]
+    selected = [item for item in ranked if item[1].source_type == "paper"][:required_papers]
     selected_ids = {item[1].source_id for item in selected}
     remaining = [item for item in ranked if item[1].source_id not in selected_ids]
     slots = config.max_deep_reads - len(selected)
     if slots > 0:
-        additions = _stratified_select(remaining, limit=slots, config=config)
+        additions = _stratified_select(
+            tuple((score, source, source_id) for score, source, source_id, _ in remaining),
+            limit=slots,
+            config=config,
+        )
     else:
         additions = ()
     return tuple(item[2] for item in selected) + additions
@@ -488,6 +597,349 @@ def _has_comparable_cross_source_pair(cards: Sequence[EvidenceCard]) -> bool:
             if matched >= 2:
                 return True
     return False
+
+
+def _normalized_title(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def build_source_relation_candidates(
+    sources: Sequence[SourceRecord],
+    skims: Sequence[SourceSkim],
+) -> Tuple[SourceRelationCandidate, ...]:
+    """Create provisional topology edges without merging semantic aliases."""
+
+    relations: dict[str, SourceRelationCandidate] = {}
+    for skim in skims:
+        for hint in skim.relation_hints:
+            relation_id = stable_id(
+                "relation",
+                skim.source_id,
+                hint.subject.casefold(),
+                hint.relation,
+                hint.object.casefold(),
+            )
+            relations[relation_id] = SourceRelationCandidate(
+                relation_id=relation_id,
+                subject=hint.subject,
+                relation=hint.relation,
+                object=hint.object,
+                confidence=0.65,
+                basis=hint.rationale,
+                source_ids=(skim.source_id,),
+            )
+
+    work_sources = [item for item in sources if item.source_type != "project"]
+    for left, right in combinations(work_sources, 2):
+        if left.source_type != "paper" and right.source_type != "paper":
+            continue
+        if source_identity(left) == source_identity(right):
+            continue
+        left_title = _normalized_title(left.title)
+        right_title = _normalized_title(right.title)
+        if not left_title or not right_title:
+            continue
+        similarity = SequenceMatcher(None, left_title, right_title).ratio()
+        exact_title = left_title == right_title
+        same_year = left.year is not None and left.year == right.year
+        left_authors = {item.casefold() for item in left.authors}
+        right_authors = {item.casefold() for item in right.authors}
+        author_overlap = bool(left_authors & right_authors)
+        if not exact_title and not (similarity >= 0.94 and (same_year or author_overlap)):
+            continue
+        ordered_ids = tuple(sorted((left.source_id, right.source_id)))
+        relation_id = stable_id("relation", *ordered_ids, "possible-same-work")
+        relations[relation_id] = SourceRelationCandidate(
+            relation_id=relation_id,
+            subject=left.source_id,
+            relation="possible-same-work",
+            object=right.source_id,
+            confidence=min(0.98, 0.82 + similarity * 0.12 + int(same_year) * 0.02),
+            basis=(
+                "Conservative title/version signal; exact identifiers did not match, "
+                "so the records remain separate pending confirmation."
+            ),
+            source_ids=ordered_ids,
+        )
+    return tuple(sorted(relations.values(), key=lambda item: item.relation_id))
+
+
+def build_review_coverage(
+    *,
+    required_facets: Sequence[str],
+    skims: Sequence[SourceSkim],
+    cards: Sequence[EvidenceCard],
+) -> ReviewCoverageMatrix:
+    cards_by_facet: dict[str, list[EvidenceCard]] = defaultdict(list)
+    for card in cards:
+        for facet in card.target_facets:
+            cards_by_facet[facet].append(card)
+    facets = []
+    for facet in required_facets:
+        selected = cards_by_facet.get(facet, [])
+        source_ids = tuple(sorted({item.source_id for item in selected}))
+        status = "covered" if len(source_ids) >= 2 else "partial" if source_ids else "missing"
+        facets.append(
+            FacetCoverage(
+                facet=facet,
+                status=status,
+                independent_source_ids=source_ids,
+                evidence_card_ids=tuple(sorted(item.card_id for item in selected)),
+            )
+        )
+    role_counts: dict[str, int] = defaultdict(int)
+    for skim in skims:
+        role_counts[skim.source_role] += 1
+    return ReviewCoverageMatrix(
+        facets=tuple(facets),
+        source_role_counts=dict(sorted(role_counts.items())),
+        evidence_source_ids=tuple(sorted({item.source_id for item in cards})),
+    )
+
+
+def analyze_review_gaps(
+    *,
+    scope_title: str,
+    required_facets: Sequence[str],
+    sources: Sequence[SourceRecord],
+    skims: Sequence[SourceSkim],
+    cards: Sequence[EvidenceCard],
+    claims: Sequence[UnderstandingClaim],
+    uncertainties: Sequence[ResearchUncertainty],
+    assessments: Sequence[NonConsensusAssessment],
+    coverage: ReviewCoverageMatrix,
+    current_year: Optional[int] = None,
+) -> Tuple[ReviewGap, ...]:
+    """Derive actionable research gaps from evidence state, never graph shape alone."""
+
+    del required_facets
+    year = current_year or datetime.now(timezone.utc).year
+    cards_by_id = {item.card_id: item for item in cards}
+    sources_by_id = {item.source_id: item for item in sources}
+    gaps: dict[str, ReviewGap] = {}
+
+    def add(
+        *,
+        kind: str,
+        key: str,
+        question: str,
+        base_priority: float,
+        blocking: bool = False,
+        report_critical: bool = False,
+        target_facets: Sequence[str] = (),
+        target_source_roles: Sequence[str] = (),
+        source_ids: Sequence[str] = (),
+        claim_ids: Sequence[str] = (),
+        next_queries: Sequence[str] = (),
+    ) -> None:
+        gap_id = stable_id("review-gap", kind, key)
+        gaps[gap_id] = ReviewGap(
+            gap_id=gap_id,
+            kind=kind,
+            question=question,
+            priority=round(
+                min(1.0, base_priority + (0.05 if report_critical else 0.0)), 2
+            ),
+            blocking=blocking,
+            report_critical=report_critical,
+            target_facets=tuple(dict.fromkeys(target_facets)),
+            target_source_roles=tuple(dict.fromkeys(target_source_roles)),
+            source_ids=tuple(sorted(set(source_ids))),
+            claim_ids=tuple(sorted(set(claim_ids))),
+            next_queries=tuple(dict.fromkeys(next_queries)),
+        )
+
+    for item in uncertainties:
+        if item.origin == "deterministic" or item.status != "open" or not item.blocking:
+            continue
+        add(
+            kind="blocking-uncertainty",
+            key=item.uncertainty_id,
+            question=item.question,
+            base_priority=1.0,
+            blocking=True,
+            report_critical=True,
+            target_facets=item.target_facets,
+            target_source_roles=item.target_source_roles or ("primary-study",),
+            source_ids=(),
+            next_queries=item.next_queries
+            or (f'"{scope_title}" {item.question} research paper evidence',),
+        )
+
+    for facet in coverage.facets:
+        if facet.status != "missing":
+            continue
+        add(
+            kind="missing-facet",
+            key=facet.facet,
+            question=f"Which primary evidence covers the missing facet: {facet.facet}?",
+            base_priority=0.90,
+            report_critical=True,
+            target_facets=(facet.facet,),
+            target_source_roles=("primary-study", "benchmark", "reproduction"),
+            next_queries=(f'"{scope_title}" {facet.facet} benchmark experiment',),
+        )
+
+    for claim in claims:
+        referenced = tuple(
+            card_id
+            for card_id in (*claim.supporting_card_ids, *claim.opposing_card_ids)
+            if card_id in cards_by_id
+        )
+        source_ids = {cards_by_id[item].source_id for item in referenced}
+        if referenced and len(source_ids) == 1:
+            add(
+                kind="single-source-claim",
+                key=claim.claim_id,
+                question=f"Which independent study confirms or challenges: {claim.statement}",
+                base_priority=0.80,
+                report_critical=True,
+                target_source_roles=("primary-study", "reproduction"),
+                source_ids=source_ids,
+                claim_ids=(claim.claim_id,),
+                next_queries=(f'"{claim.statement}" replication limitations baseline',),
+            )
+
+    for assessment in assessments:
+        if assessment.result != "insufficient-evidence" or len(
+            set(assessment.independent_source_ids)
+        ) < 2:
+            continue
+        add(
+            kind="incomparable-evidence",
+            key=assessment.assessment_id,
+            question=f"Which controlled experiments make this comparison valid: {assessment.question}",
+            base_priority=0.75,
+            report_critical=True,
+            target_source_roles=("benchmark", "reproduction", "primary-study"),
+            source_ids=assessment.independent_source_ids,
+            next_queries=(f'"{assessment.question}" controlled benchmark same model hardware',),
+        )
+
+    method_sources: dict[str, set[str]] = defaultdict(set)
+    method_core_sources: dict[str, set[str]] = defaultdict(set)
+    for skim in skims:
+        for method in skim.method_families:
+            method_sources[method].add(skim.source_id)
+            if skim.label == "core":
+                method_core_sources[method].add(skim.source_id)
+    for method, core_source_ids in sorted(method_core_sources.items()):
+        method_cards = [
+            item
+            for item in cards
+            if item.source_id in method_sources[method]
+            or (item.method and item.method.casefold() == method.casefold())
+        ]
+        engineering_cards = [
+            item
+            for item in method_cards
+            if set(item.target_facets) & ENGINEERING_FACETS
+        ]
+        if not engineering_cards:
+            add(
+                kind="method-evidence",
+                key=method,
+                question=f"What engineering measurements and failure conditions are reported for {method}?",
+                base_priority=0.70,
+                target_facets=tuple(sorted(ENGINEERING_FACETS & set(coverage_item.facet for coverage_item in coverage.facets))),
+                target_source_roles=("primary-study", "reproduction", "project"),
+                source_ids=core_source_ids,
+                next_queries=(f'"{method}" latency memory kernel failure long context',),
+            )
+        if len(core_source_ids) == 1 and not method_cards:
+            add(
+                kind="orphan-concept",
+                key=method,
+                question=f"Which independent sources define, evaluate, or reproduce {method}?",
+                base_priority=0.60,
+                target_source_roles=("primary-study", "survey", "reproduction"),
+                source_ids=core_source_ids,
+                next_queries=(f'"{method}" sparse attention paper evaluation',),
+            )
+        dated_sources = [sources_by_id[item] for item in core_source_ids if item in sources_by_id]
+        known_years = [item.year for item in dated_sources if item.year is not None]
+        if known_years and max(known_years) <= year - 2:
+            add(
+                kind="stale-evidence",
+                key=method,
+                question=f"What evidence published after {year - 2} updates the {method} route?",
+                base_priority=0.50,
+                target_source_roles=("primary-study", "benchmark", "project"),
+                source_ids=core_source_ids,
+                next_queries=(f'"{method}" {year - 1} {year} long context',),
+            )
+    return tuple(sorted(gaps.values(), key=lambda item: (-item.priority, item.gap_id)))
+
+
+def merge_gap_uncertainties(
+    uncertainties: Sequence[ResearchUncertainty],
+    gaps: Sequence[ReviewGap],
+) -> Tuple[ResearchUncertainty, ...]:
+    semantic = [item for item in uncertainties if item.origin != "deterministic"]
+    category_by_kind = {
+        "blocking-uncertainty": "scope",
+        "missing-facet": "coverage",
+        "single-source-claim": "replication",
+        "incomparable-evidence": "nonconsensus",
+        "method-evidence": "engineering",
+        "orphan-concept": "topology",
+        "stale-evidence": "freshness",
+    }
+    generated = [
+        ResearchUncertainty(
+            uncertainty_id=item.gap_id,
+            question=item.question,
+            category=category_by_kind[item.kind],
+            priority=item.priority,
+            blocking=item.blocking,
+            status="open",
+            next_queries=item.next_queries,
+            origin="deterministic",
+            target_facets=item.target_facets,
+            target_source_roles=item.target_source_roles,
+            report_critical=item.report_critical,
+        )
+        for item in gaps
+        if item.kind != "blocking-uncertainty"
+    ]
+    return tuple(
+        sorted((*semantic, *generated), key=lambda item: (-item.priority, item.uncertainty_id))
+    )
+
+
+def formal_wiki_paper_identities(wiki_root: Path) -> frozenset[str]:
+    """Read existing paper identifiers for promotion deduplication."""
+
+    identities: set[str] = set()
+    paper_root = wiki_root / "papers"
+    if not paper_root.is_dir():
+        return frozenset()
+    for path in sorted(paper_root.glob("*.md")):
+        text = path.read_text(encoding="utf-8-sig")
+        match = re.match(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n", text, re.DOTALL)
+        if not match:
+            continue
+        try:
+            payload = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        paper_id = str(payload.get("id") or "").strip()
+        if paper_id:
+            identities.add(paper_id)
+        identifiers = payload.get("identifiers") or {}
+        if isinstance(identifiers, Mapping):
+            arxiv = str(identifiers.get("arxiv") or "").strip()
+            doi = str(identifiers.get("doi") or "").strip()
+            try:
+                if arxiv:
+                    identities.add(f"arxiv:{canonical_arxiv_id(arxiv)}")
+                if doi:
+                    identities.add(f"doi:{canonical_doi(doi)}")
+            except ValueError:
+                continue
+    return frozenset(identities)
 
 
 def review_readiness(
@@ -566,9 +1018,15 @@ def search_saturated(round_gains: Sequence[Mapping[str, object]]) -> bool:
             return False
         if int(gain.get("new_evidence_cards") or 0) > 0:
             return False
+        if int(gain.get("new_independent_sources") or 0) > 0:
+            return False
+        if int(gain.get("new_covered_facets") or 0) > 0:
+            return False
         if int(gain.get("resolved_blocking_uncertainties") or 0) > 0:
             return False
         if bool(gain.get("independent_counterevidence")):
+            return False
+        if int(gain.get("new_confirmed_topology_relations") or 0) > 0:
             return False
     return True
 
@@ -578,7 +1036,12 @@ __all__ = [
     "canonical_doi",
     "canonical_repository",
     "canonical_url",
+    "analyze_review_gaps",
+    "build_review_coverage",
+    "build_source_relation_candidates",
+    "formal_wiki_paper_identities",
     "merge_sources",
+    "merge_gap_uncertainties",
     "review_readiness",
     "search_saturated",
     "select_for_deep_read",

@@ -41,6 +41,9 @@ Every card must preserve:
   claims. Page-level Web evidence must use a section found in the supplied
   content or the canonical page URL.
 - Keep different experiments and conclusions in separate cards.
+- When the selected source is a survey, keep taxonomy and navigation statements
+  only. Resolve quantitative results to the cited primary study before creating
+  an experimental EvidenceCard.
 
 ## Output
 

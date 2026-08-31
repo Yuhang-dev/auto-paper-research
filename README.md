@@ -33,8 +33,8 @@
 
 ```text
 Fast Research Loop
-问题 → 多源检索 → Skim → 不确定性驱动补搜 → Deep Read
-     → EvidenceCard → 带引用综述
+问题 → 多源检索 → source-role 平衡 Skim → 临时技术地图
+     → Gap 驱动补搜 → Deep Read → EvidenceCard → 带引用综述
 
 人工批准后：PromotionManifest → Full Ingest → staged-for-wiki
                          → 显式 publish-staged → 正式 Wiki
@@ -46,6 +46,8 @@ Fast Research Loop
 `SEMANTIC_SCHOLAR_API_KEY` 后，系统为进入 Deep Read 的少量论文补充 citation 和
 外部 ID。Deep Read 的来源策略优先保留原始论文：Smoke 2 篇，standard 至少 6 篇；
 ResearchGate、Academia.edu 等镜像用于导航，正式证据来自原始论文或官方来源。
+每轮额外生成 `coverage-matrix.yaml` 和 `research-gaps.yaml`；语义相似来源先保存为
+关系候选，只有精确 DOI/arXiv/repository/URL 身份会自动合并。
 使用说明见 `docs/REVIEW_FIRST_HARNESS.md`。
 
 项目现在用 LangGraph 作为编排层。确定性的 Wiki parser、resolver、validator、

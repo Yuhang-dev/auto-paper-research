@@ -15,6 +15,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 ReviewProfile = Literal["smoke", "standard"]
 SourceType = Literal["paper", "project", "web"]
+SourceRole = Literal[
+    "survey",
+    "primary-study",
+    "benchmark",
+    "reproduction",
+    "project",
+    "background",
+]
 ProviderName = Literal[
     "deepxiv",
     "semantic_scholar",
@@ -39,6 +47,25 @@ AssessmentResult = Literal[
     "contested",
     "insufficient-evidence",
 ]
+RelationKind = Literal[
+    "possible-same-work",
+    "alias-of",
+    "variant-of",
+    "extends",
+    "implements",
+    "evaluates",
+    "supports",
+    "opposes",
+]
+ReviewGapKind = Literal[
+    "blocking-uncertainty",
+    "missing-facet",
+    "single-source-claim",
+    "incomparable-evidence",
+    "method-evidence",
+    "orphan-concept",
+    "stale-evidence",
+]
 
 
 class ReviewModel(BaseModel):
@@ -59,6 +86,10 @@ class ReviewRunConfig(ReviewModel):
     max_skims: int = Field(ge=1, le=200)
     max_deep_reads: int = Field(ge=1, le=100)
     minimum_deep_read_papers: int = Field(default=2, ge=0, le=100)
+    minimum_core_study_deep_reads: int = Field(default=0, ge=0, le=100)
+    max_survey_deep_reads: int = Field(default=2, ge=0, le=100)
+    max_nonpaper_deep_reads: int = Field(default=2, ge=0, le=100)
+    source_role_targets: Dict[str, int] = Field(default_factory=dict)
     max_promotions: int = Field(ge=0, le=50)
     paper_source_quota: int = Field(ge=0)
     project_source_quota: int = Field(ge=0)
@@ -93,6 +124,32 @@ class ReviewRunConfig(ReviewModel):
             raise ValueError(
                 "minimum_deep_read_papers cannot exceed max_deep_reads"
             )
+        if self.minimum_core_study_deep_reads > self.max_deep_reads:
+            raise ValueError(
+                "minimum_core_study_deep_reads cannot exceed max_deep_reads"
+            )
+        if self.max_survey_deep_reads > self.max_deep_reads:
+            raise ValueError("max_survey_deep_reads cannot exceed max_deep_reads")
+        if self.max_nonpaper_deep_reads > self.max_deep_reads:
+            raise ValueError("max_nonpaper_deep_reads cannot exceed max_deep_reads")
+        allowed_roles = {
+            "survey",
+            "primary-study",
+            "benchmark",
+            "reproduction",
+            "project",
+            "background",
+        }
+        unknown_roles = set(self.source_role_targets) - allowed_roles
+        if unknown_roles:
+            raise ValueError(
+                "source_role_targets contains unsupported roles: "
+                + ", ".join(sorted(unknown_roles))
+            )
+        if any(value < 0 for value in self.source_role_targets.values()):
+            raise ValueError("source_role_targets values cannot be negative")
+        if sum(self.source_role_targets.values()) > self.max_skims:
+            raise ValueError("source_role_targets cannot exceed max_skims")
         if self.max_promotions > self.max_deep_reads:
             raise ValueError("max_promotions cannot exceed max_deep_reads")
         quota_total = (
@@ -145,6 +202,10 @@ class ReviewRunConfig(ReviewModel):
                 "max_skims": 4,
                 "max_deep_reads": 2,
                 "minimum_deep_read_papers": 2,
+                "minimum_core_study_deep_reads": 0,
+                "max_survey_deep_reads": 2,
+                "max_nonpaper_deep_reads": 2,
+                "source_role_targets": {},
                 "max_promotions": 0,
                 "paper_source_quota": 5,
                 "project_source_quota": 1,
@@ -158,6 +219,16 @@ class ReviewRunConfig(ReviewModel):
                 "max_skims": 20,
                 "max_deep_reads": 10,
                 "minimum_deep_read_papers": 6,
+                "minimum_core_study_deep_reads": 6,
+                "max_survey_deep_reads": 2,
+                "max_nonpaper_deep_reads": 2,
+                "source_role_targets": {
+                    "survey": 2,
+                    "primary-study": 6,
+                    "benchmark": 2,
+                    "reproduction": 1,
+                    "project": 2,
+                },
                 "max_promotions": 6,
                 "paper_source_quota": 30,
                 "project_source_quota": 10,
@@ -290,6 +361,7 @@ class SourceMaterial(ReviewModel):
 
 class SourceScreening(ReviewModel):
     source_id: str
+    source_role: SourceRole = "background"
     label: Literal["core", "adjacent", "background", "exclude"]
     relevance_score: float = Field(ge=0, le=1)
     evidence_potential: float = Field(ge=0, le=1)
@@ -312,9 +384,25 @@ class SourceScreeningBatch(ReviewModel):
     screenings: Tuple[SourceScreening, ...] = Field(min_length=1, max_length=16)
 
 
+class SourceRelationHint(ReviewModel):
+    subject: str
+    relation: Literal[
+        "alias-of",
+        "variant-of",
+        "extends",
+        "implements",
+        "evaluates",
+        "supports",
+        "opposes",
+    ]
+    object: str
+    rationale: str
+
+
 class SourceSkim(ReviewModel):
     source_id: str
     source_type: SourceType
+    source_role: SourceRole = "background"
     label: Literal["core", "adjacent", "background", "exclude"]
     relevance_score: float = Field(ge=0, le=1)
     why_relevant: str
@@ -324,6 +412,7 @@ class SourceSkim(ReviewModel):
     important_locations: Tuple[str, ...] = ()
     limitations: Tuple[str, ...] = ()
     questions_raised: Tuple[str, ...] = ()
+    relation_hints: Tuple[SourceRelationHint, ...] = ()
     target_facets: Tuple[str, ...] = ()
     select_for_deep_read: bool = False
     basis: Literal["metadata", "abstract", "source-excerpt"]
@@ -341,6 +430,9 @@ class ResearchUncertainty(ReviewModel):
         "nonconsensus",
         "replication",
         "scope",
+        "coverage",
+        "topology",
+        "freshness",
     ]
     priority: float = Field(ge=0, le=1)
     blocking: bool = False
@@ -349,6 +441,52 @@ class ResearchUncertainty(ReviewModel):
     opposing_card_ids: Tuple[str, ...] = ()
     next_queries: Tuple[str, ...] = ()
     resolution: Optional[str] = None
+    origin: Literal["semantic", "deterministic"] = "semantic"
+    target_facets: Tuple[str, ...] = ()
+    target_source_roles: Tuple[SourceRole, ...] = ()
+    report_critical: bool = False
+
+
+class SourceRelationCandidate(ReviewModel):
+    relation_id: str
+    subject: str
+    relation: RelationKind
+    object: str
+    confidence: float = Field(ge=0, le=1)
+    basis: str
+    source_ids: Tuple[str, ...]
+    status: Literal["candidate", "confirmed", "rejected"] = "candidate"
+    provisional: Literal[True] = True
+    citation_eligible: Literal[False] = False
+
+
+class FacetCoverage(ReviewModel):
+    facet: str
+    status: FacetStatus
+    independent_source_ids: Tuple[str, ...] = ()
+    evidence_card_ids: Tuple[str, ...] = ()
+
+
+class ReviewCoverageMatrix(ReviewModel):
+    schema_version: Literal["0.1"] = "0.1"
+    facets: Tuple[FacetCoverage, ...]
+    source_role_counts: Dict[str, int] = Field(default_factory=dict)
+    evidence_source_ids: Tuple[str, ...] = ()
+
+
+class ReviewGap(ReviewModel):
+    gap_id: str
+    kind: ReviewGapKind
+    question: str
+    priority: float = Field(ge=0, le=1)
+    blocking: bool = False
+    report_critical: bool = False
+    target_facets: Tuple[str, ...] = ()
+    target_source_roles: Tuple[SourceRole, ...] = ()
+    source_ids: Tuple[str, ...] = ()
+    claim_ids: Tuple[str, ...] = ()
+    next_queries: Tuple[str, ...] = ()
+    status: Literal["open", "resolved"] = "open"
 
 
 class UnderstandingClaim(ReviewModel):
@@ -671,17 +809,23 @@ __all__ = [
     "ReasoningUpdate",
     "ResearchUncertainty",
     "RetrievalQuery",
+    "ReviewCoverageMatrix",
     "ReviewErrorEvent",
+    "ReviewGap",
     "ReviewReadiness",
     "ReviewRunConfig",
     "ReviewScope",
     "ReviewSynthesisDraft",
     "SourceRecord",
+    "SourceRelationCandidate",
+    "SourceRelationHint",
+    "SourceRole",
     "SourceMaterial",
     "SourceScreening",
     "SourceScreeningBatch",
     "SourceSkim",
     "SourceType",
+    "FacetCoverage",
     "SynthesisStatement",
     "TaxonomyEntry",
     "TrajectoryEvent",

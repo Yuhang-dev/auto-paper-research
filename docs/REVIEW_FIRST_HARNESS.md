@@ -40,6 +40,11 @@ Deep Read 论文后，按 arXiv ID 或 DOI 为这些少量论文补充 citation 
 官方项目和一手 Web 资料。标题明确为 survey 的论文会降权，但仍可用于技术谱系。
 ResearchGate、Academia.edu、Scribd 等聚合镜像只保留为导航线索，不能进入证据抽取。
 
+Standard 的 20 个 Skim 采用 source role 软目标：survey 2、primary study 6、
+benchmark 2、reproduction 1、project 2，其余按综合得分补齐。10 个 Deep Read 中
+survey 最多 2、非论文来源最多 2，并优先保证 6 个 primary/benchmark/reproduction
+论文。来源不足时按稳定排名补位，不中断运行。
+
 ## 3. Fast Research Loop
 
 独立 LangGraph 位于 `research_harness/review_control.py`：
@@ -57,9 +62,11 @@ frame
 ```
 
 每轮检索围绕最高优先级的 `ResearchUncertainty`，而不是为了增加论文数量。
-默认最多 3 轮。连续两轮都没有新方法路线、Citation-ready EvidenceCard、被解决的
-blocking uncertainty 或独立反证时，判为基本饱和。达到预算但仍有缺口时仍生成报告，
-并把缺口列为 unresolved。
+默认最多 3 轮。每轮 assessment 后，确定性 Gap Analyzer 根据缺失 facet、单来源
+结论、不可比实验、方法工程证据、临时孤岛节点和资料时效性生成下一轮检索目标。
+连续两轮都没有新方法路线、Citation-ready EvidenceCard、新独立来源、新 covered
+facet、被解决的 blocking uncertainty、独立反证或新确认关系时，判为基本饱和。
+达到预算但仍有缺口时仍生成报告，并把缺口列为 unresolved。
 
 并发边界：网络 4、Skim 2、深读/证据抽取 2；SQLite 和 artifact 写入保持串行。
 批次产物按稳定 source ID 排序。每个图节点形成 checkpoint，单个已经完成的 Skim、
@@ -74,6 +81,9 @@ material 和 EvidenceCard 也落盘，因此中断后不会重做已完成项。
 | `ReviewRunConfig` | 范围、漏斗、并发、模型退化和停止阶段 |
 | `SourceRecord` | 论文、项目、官方网页的统一发现记录 |
 | `SourceSkim` | 明确为 provisional、不可引用的轻量阅读结果 |
+| `SourceRelationCandidate` | 待确认的 alias/variant/extends/implements 等临时关系 |
+| `ReviewCoverageMatrix` | required facet 的独立证据来源和卡片覆盖 |
+| `ReviewGap` | 确定性生成的检索盲点、固定优先级和下一步查询 |
 | `ResearchUncertainty` | 未解决问题、优先级、blocking 和下一步查询 |
 | `UnderstandingClaim` | 暂定理解、支持/反对卡片和替代解释 |
 | `EvidenceCard` | 带 hash、实验条件和 locator 的原子证据 |
@@ -96,8 +106,8 @@ EvidenceCard 等大对象保存在运行目录，不在每轮重复注入模型�
 - GitHub REST：仓库元数据、README、license、版本和活跃度。
 
 论文按 DOI/arXiv ID、项目按 `owner/repo`、网页按规范 URL 去重，同时保留每次
-query、provider、rank 和发现时间。单个 provider 失败只形成该来源的错误事件，
-不会终止整轮。
+query、provider、rank 和发现时间。标题/作者相似只形成 `possible-same-work`
+候选关系，不自动合并。单个 provider 失败只形成该来源的错误事件，不会终止整轮。
 
 模型分工：
 
@@ -146,6 +156,7 @@ fingerprint；API key 从不进入 config、artifact 或 SQLite checkpoint。
   事实和 locator，并移除格式无效或不完整的条目；
 - 静态官方 Web 页支持页面级作者陈述或文档事实，
   不能代替 PDF 的定量实验结果；
+- survey 的定量转述只用于导航，量化 EvidenceCard 必须回到原始研究；
 - 数字必须带实验条件；
 - locator 和 content hash 必须存在；
 - 报告不得引用未知 card ID；
@@ -169,9 +180,10 @@ Fast Loop 使用显式绑定，不存在智能 Skill Router：
 | reasoning/synthesis | `review-synthesize` |
 | promotion | `ingest-paper`，之后 `verify-evidence / wiki-link` |
 
-归一化、去重、来源权威性门槛、论文优先 Deep Read、Skim 数字清理、
-EvidenceCard schema、独立来源校验、技术地图、readiness、saturation 和 citation
-completeness 都由 Python 确定性实现。
+归一化、去重、source role 配额、来源权威性门槛、论文优先 Deep Read、Skim
+数字清理、EvidenceCard schema、Coverage Matrix、Gap priority、独立来源校验、
+技术地图、readiness、saturation、promotion ranking 和 citation completeness
+都由 Python 确定性实现。
 
 错误先写入本次运行的 `.harness/review-runs/<run-id>/state/errors.jsonl`。只有同一
 `recurrence_key` 在至少两个独立 run 中出现，才进入
@@ -264,6 +276,8 @@ research/<research-id>/reviews/<run-id>/
 ├── source-skims.jsonl
 ├── evidence-cards.jsonl
 ├── technology-map.yaml
+├── coverage-matrix.yaml
+├── research-gaps.yaml
 ├── nonconsensus-assessments.yaml
 ├── trajectory-summary.jsonl
 └── promotion-manifest.yaml

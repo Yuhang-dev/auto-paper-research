@@ -14,9 +14,12 @@ from pydantic import BaseModel, ValidationError
 
 from .model_client import ReviewModelBundle, create_profile_chat_model
 from .review_logic import (
+    build_source_relation_candidates,
     sanitize_provisional_skim,
     source_authority,
     source_evidence_eligible,
+    source_identity,
+    source_is_survey,
     stable_id,
     validate_nonconsensus_assessment,
 )
@@ -36,6 +39,7 @@ from .review_models import (
     ReviewSynthesisDraft,
     SourceMaterial,
     SourceRecord,
+    SourceRole,
     SourceScreeningBatch,
     SourceSkim,
     SynthesisStatement,
@@ -74,6 +78,27 @@ def _web_card_supported(card: EvidenceCard, material: SourceMaterial) -> bool:
     )
 
 
+def _source_role_card_supported(card: EvidenceCard, source_role: SourceRole) -> bool:
+    return not (
+        source_role == "survey"
+        and (
+            card.evidence_type == "experiment"
+            or card.metric is not None
+            or card.value is not None
+        )
+    )
+
+
+def _normalized_source_role(source: SourceRecord, proposed: SourceRole) -> SourceRole:
+    if source.source_type == "project":
+        return "project"
+    if source_is_survey(source):
+        return "survey"
+    if proposed == "project":
+        return "background"
+    return proposed
+
+
 class ReviewSemanticEngine(Protocol):
     requires_network: bool
     model_fingerprint: str
@@ -101,6 +126,7 @@ class ReviewSemanticEngine(Protocol):
         *,
         scope: ReviewScope,
         source: SourceRecord,
+        source_role: SourceRole = "background",
     ) -> SourceSkim: ...
 
     def reason(
@@ -120,6 +146,7 @@ class ReviewSemanticEngine(Protocol):
         source: SourceRecord,
         material: SourceMaterial,
         claims: Sequence[UnderstandingClaim],
+        source_role: SourceRole = "background",
     ) -> EvidenceExtraction: ...
 
     def synthesize(
@@ -324,6 +351,11 @@ class LangChainReviewSemanticEngine:
     ) -> QueryPlan:
         skill = self.registry.get("search-paper")
         remaining = max(1, config.max_queries - len(prior_queries))
+        prioritized_uncertainties = sorted(
+            (item for item in uncertainties if item.status == "open"),
+            key=lambda item: (-item.priority, item.uncertainty_id),
+        )[:3]
+        prioritized_ids = {item.uncertainty_id for item in prioritized_uncertainties}
         draft = _invoke_structured(
             self.fast_model,
             QueryPlan,
@@ -336,18 +368,18 @@ class LangChainReviewSemanticEngine:
                 "task": "Plan the next review retrieval round.",
                 "scope": _payload(scope),
                 "round": round_number,
-                "open_uncertainties": _payload(
-                    sorted(
-                        (item for item in uncertainties if item.status == "open"),
-                        key=lambda item: (-item.priority, item.uncertainty_id),
-                    )[:8]
-                ),
+                "open_uncertainties": _payload(prioritized_uncertainties),
                 "prior_queries": _payload(prior_queries),
                 "enabled_providers": list(enabled_providers),
                 "constraints": {
                     "maximum_queries": min(6, remaining),
+                    "target_only_the_three_highest_priority_gaps": True,
+                    "at_least_one_primary_paper_query": "deepxiv",
+                    "project_gap_provider": "github",
                     "write_search_queries_in_English": True,
-                    "include_at_least_one_disconfirming_query_after_round_one": True,
+                    "include_at_least_one_disconfirming_query_when_hypotheses_exist": bool(
+                        scope.candidate_hypotheses
+                    ),
                     "providers": list(enabled_providers),
                 },
             },
@@ -366,6 +398,15 @@ class LangChainReviewSemanticEngine:
                         "id": f"R{round_number:02d}Q{position:02d}",
                         "round": round_number,
                         "target_facets": facets,
+                        "uncertainty_id": (
+                            item.uncertainty_id
+                            if item.uncertainty_id in prioritized_ids
+                            else prioritized_uncertainties[
+                                (position - 1) % len(prioritized_uncertainties)
+                            ].uncertainty_id
+                            if prioritized_uncertainties
+                            else None
+                        ),
                     }
                 )
             )
@@ -380,6 +421,18 @@ class LangChainReviewSemanticEngine:
             for provider in enabled_providers:
                 if provider_counts[provider] > 0:
                     continue
+                target = next(
+                    (
+                        item
+                        for item in prioritized_uncertainties
+                        if provider == "github" and "project" in item.target_source_roles
+                    ),
+                    prioritized_uncertainties[
+                        len(normalized) % len(prioritized_uncertainties)
+                    ]
+                    if prioritized_uncertainties
+                    else None,
+                )
                 fallback = RetrievalQuery(
                     id="pending",
                     round=round_number,
@@ -389,7 +442,12 @@ class LangChainReviewSemanticEngine:
                         "Ensure first-round multi-source coverage before "
                         "uncertainty-driven provider reallocation."
                     ),
-                    target_facets=scope.required_facets[:2],
+                    target_facets=(
+                        target.target_facets
+                        if target and target.target_facets
+                        else scope.required_facets[:2]
+                    ),
+                    uncertainty_id=target.uncertainty_id if target else None,
                 )
                 if len(normalized) < min(8, remaining):
                     normalized.append(fallback)
@@ -406,7 +464,75 @@ class LangChainReviewSemanticEngine:
                     provider_counts[removed] -= 1
                     normalized[replace_at] = fallback
                 provider_counts[provider] += 1
-        elif normalized and not any(item.disconfirming for item in normalized):
+        if "deepxiv" in enabled_providers and not any(
+            item.provider == "deepxiv" for item in normalized
+        ):
+            target = prioritized_uncertainties[0] if prioritized_uncertainties else None
+            fallback = RetrievalQuery(
+                id="pending",
+                round=round_number,
+                provider="deepxiv",
+                text=(
+                    target.next_queries[0]
+                    if target and target.next_queries
+                    else f"{scope.question} primary research paper"
+                ),
+                purpose="Retrieve primary-paper evidence for the highest-priority gap.",
+                target_facets=(target.target_facets if target else scope.required_facets[:2]),
+                uncertainty_id=target.uncertainty_id if target else None,
+            )
+            if len(normalized) < min(8, remaining):
+                normalized.append(fallback)
+            else:
+                normalized[-1] = fallback
+        project_gap = next(
+            (
+                item
+                for item in prioritized_uncertainties
+                if "project" in item.target_source_roles
+            ),
+            None,
+        )
+        if (
+            project_gap
+            and "github" in enabled_providers
+            and not any(
+                item.provider == "github"
+                and item.uncertainty_id == project_gap.uncertainty_id
+                for item in normalized
+            )
+        ):
+            fallback = RetrievalQuery(
+                id="pending",
+                round=round_number,
+                provider="github",
+                text=(
+                    project_gap.next_queries[0]
+                    if project_gap.next_queries
+                    else f"{project_gap.question} GitHub implementation"
+                ),
+                purpose="Find the official implementation for an engineering gap.",
+                target_facets=project_gap.target_facets or scope.required_facets[:2],
+                uncertainty_id=project_gap.uncertainty_id,
+            )
+            if len(normalized) < min(8, remaining):
+                normalized.append(fallback)
+            else:
+                replace_at = next(
+                    (
+                        index
+                        for index in range(len(normalized) - 1, -1, -1)
+                        if normalized[index].provider not in {"deepxiv", "github"}
+                    ),
+                    None,
+                )
+                if replace_at is not None:
+                    normalized[replace_at] = fallback
+        if (
+            scope.candidate_hypotheses
+            and normalized
+            and not any(item.disconfirming for item in normalized)
+        ):
             first = normalized[0]
             normalized[0] = first.model_copy(
                 update={
@@ -471,13 +597,26 @@ class LangChainReviewSemanticEngine:
             raise ValueError(
                 "source screener must return every requested source exactly once"
             )
-        return result
+        sources_by_id = {item.source_id: item for item in sources}
+        return SourceScreeningBatch(
+            screenings=tuple(
+                item.model_copy(
+                    update={
+                        "source_role": _normalized_source_role(
+                            sources_by_id[item.source_id], item.source_role
+                        )
+                    }
+                )
+                for item in result.screenings
+            )
+        )
 
     def skim_source(
         self,
         *,
         scope: ReviewScope,
         source: SourceRecord,
+        source_role: SourceRole = "background",
     ) -> SourceSkim:
         skill_name = "project-audit" if source.source_type == "project" else "source-skim"
         skill = self.registry.get(skill_name)
@@ -495,6 +634,7 @@ class LangChainReviewSemanticEngine:
                 "source": {
                     "source_id": source.source_id,
                     "source_type": source.source_type,
+                    "source_role": source_role,
                     "canonical_url": source.canonical_url,
                     "source_authority": source_authority(source),
                     "title": source.title,
@@ -515,6 +655,7 @@ class LangChainReviewSemanticEngine:
                 "constraints": {
                     "source_id": source.source_id,
                     "source_type": source.source_type,
+                    "source_role": source_role,
                     "provisional": True,
                     "citation_eligible": False,
                 },
@@ -528,6 +669,12 @@ class LangChainReviewSemanticEngine:
             update={
                 "source_id": source.source_id,
                 "source_type": source.source_type,
+                "source_role": _normalized_source_role(
+                    source,
+                    result.source_role
+                    if result.source_role != "background"
+                    else source_role,
+                ),
                 "provisional": True,
                 "citation_eligible": False,
                 "select_for_deep_read": (
@@ -597,6 +744,7 @@ class LangChainReviewSemanticEngine:
         source: SourceRecord,
         material: SourceMaterial,
         claims: Sequence[UnderstandingClaim],
+        source_role: SourceRole = "background",
     ) -> EvidenceExtraction:
         if not source_evidence_eligible(source):
             raise ValueError(
@@ -618,6 +766,7 @@ class LangChainReviewSemanticEngine:
                 "task": "Extract citation-ready EvidenceCards from one deep-read source.",
                 "scope": _payload(scope),
                 "source": _payload(source),
+                "source_role": source_role,
                 "material": {
                     "source_id": material.source_id,
                     "media_type": material.media_type,
@@ -640,6 +789,9 @@ class LangChainReviewSemanticEngine:
                     "numeric_results_require_conditions": True,
                     "locator_required": True,
                     "maximum_cards": maximum_cards,
+                    "survey_quantitative_results_are_navigation_only": (
+                        source_role == "survey"
+                    ),
                     "atomicity": (
                         "Keep one metric or one qualitative conclusion per card. "
                         "Select the highest-value cards instead of combining results "
@@ -656,6 +808,9 @@ class LangChainReviewSemanticEngine:
         cards = []
         omitted_cards = 0
         for item in result.cards:
+            if not _source_role_card_supported(item, source_role):
+                omitted_cards += 1
+                continue
             locator = item.locator
             if material.media_type == "web-content":
                 # Static page extraction cannot establish table/figure results,
@@ -730,6 +885,11 @@ class LangChainReviewSemanticEngine:
             limitations.append(
                 f"Deterministic evidence guards omitted {omitted_cards} cards "
                 "that lacked an eligible material/locator combination."
+            )
+        if source_role == "survey":
+            limitations.append(
+                "Survey material was retained for taxonomy and navigation; "
+                "quantitative cards require the cited primary study."
             )
         return EvidenceExtraction(
             source_id=source.source_id,
@@ -1042,6 +1202,7 @@ def render_review_markdown(
 
 def build_technology_map(
     *,
+    sources: Sequence[SourceRecord] = (),
     skims: Sequence[SourceSkim],
     cards: Sequence[EvidenceCard],
 ) -> dict[str, Any]:
@@ -1056,17 +1217,24 @@ def build_technology_map(
             facets[facet].add(card.card_id)
         if card.method:
             evidenced_methods[card.method].add(card.card_id)
+    provisional_concepts = [
+        {
+            "name": name,
+            "source_ids": sorted(source_ids),
+            "provisional": True,
+            "citation_eligible": False,
+        }
+        for name, source_ids in sorted(families.items())
+    ]
+    role_sources: dict[str, set[str]] = defaultdict(set)
+    for skim in skims:
+        role_sources[skim.source_role].add(skim.source_id)
+    relations = build_source_relation_candidates(sources, skims)
     return {
         "schema_version": "0.1",
-        "method_families": [
-            {
-                "name": name,
-                "source_ids": sorted(source_ids),
-                "provisional": True,
-                "citation_eligible": False,
-            }
-            for name, source_ids in sorted(families.items())
-        ],
+        "method_families": provisional_concepts,
+        "provisional_concepts": provisional_concepts,
+        "relation_candidates": [item.model_dump(mode="json") for item in relations],
         "evidenced_methods": [
             {"name": name, "evidence_card_ids": sorted(card_ids)}
             for name, card_ids in sorted(evidenced_methods.items())
@@ -1074,6 +1242,10 @@ def build_technology_map(
         "evidence_facets": [
             {"name": name, "evidence_card_ids": sorted(card_ids)}
             for name, card_ids in sorted(facets.items())
+        ],
+        "source_roles": [
+            {"role": role, "source_ids": sorted(source_ids), "count": len(source_ids)}
+            for role, source_ids in sorted(role_sources.items())
         ],
     }
 
@@ -1084,6 +1256,11 @@ def build_promotion_manifest(
     sources: Sequence[SourceRecord],
     cards: Sequence[EvidenceCard],
     created_at: str,
+    draft: Optional[ReviewSynthesisDraft] = None,
+    claims: Sequence[UnderstandingClaim] = (),
+    uncertainties: Sequence[ResearchUncertainty] = (),
+    assessments: Sequence[NonConsensusAssessment] = (),
+    existing_paper_identities: Sequence[str] = (),
 ) -> PromotionManifest:
     if config.max_promotions == 0:
         return PromotionManifest(
@@ -1094,29 +1271,78 @@ def build_promotion_manifest(
             created_at=created_at,
         )
     by_source = {item.source_id: item for item in sources}
+    report_card_ids: set[str] = set()
+    if draft is not None:
+        for item in (
+            *draft.core_findings,
+            *draft.task_and_performance,
+            *draft.engineering_bottlenecks,
+        ):
+            report_card_ids.update(item.evidence_card_ids)
+        for item in draft.taxonomy:
+            report_card_ids.update(item.evidence_card_ids)
+        for item in draft.projects:
+            report_card_ids.update(item.evidence_card_ids)
+    claim_card_ids = {
+        card_id
+        for item in claims
+        for card_id in (*item.supporting_card_ids, *item.opposing_card_ids)
+    }
+    blocking_card_ids = {
+        card_id
+        for item in uncertainties
+        if item.blocking
+        for card_id in (*item.supporting_card_ids, *item.opposing_card_ids)
+    }
+    assessment_card_ids = {
+        card_id
+        for item in assessments
+        for card_id in (*item.supporting_card_ids, *item.opposing_card_ids)
+    }
+    known_wiki = set(existing_paper_identities)
     cards_by_source: dict[str, list[EvidenceCard]] = defaultdict(list)
     for card in cards:
         cards_by_source[card.source_id].append(card)
     ranked = []
     for source_id, source_cards in cards_by_source.items():
         source = by_source.get(source_id)
-        if source is None or source.source_type != "paper" or not source.local_path:
+        if (
+            source is None
+            or source.source_type != "paper"
+            or not source.local_path
+            or source_identity(source) in known_wiki
+            or source.source_id in known_wiki
+        ):
+            continue
+        cited = [item for item in source_cards if item.card_id in report_card_ids]
+        if not cited:
             continue
         verified_bonus = sum(item.status == "verified" for item in source_cards)
         cross_bonus = sum(item.status == "cross-checked" for item in source_cards)
-        score = len(source_cards) * 10 + verified_bonus * 3 + cross_bonus
-        ranked.append((score, source, source_cards))
+        claim_bonus = sum(item.card_id in claim_card_ids for item in source_cards)
+        blocking_bonus = sum(item.card_id in blocking_card_ids for item in source_cards)
+        assessment_bonus = sum(item.card_id in assessment_card_ids for item in source_cards)
+        score = (
+            len(cited) * 100
+            + claim_bonus * 20
+            + blocking_bonus * 20
+            + assessment_bonus * 15
+            + verified_bonus * 3
+            + cross_bonus
+        )
+        ranked.append((score, source, source_cards, cited))
     ranked.sort(key=lambda item: (-item[0], item[1].source_id))
     items = []
-    for _, source, source_cards in ranked[: config.max_promotions]:
+    for _, source, source_cards, cited in ranked[: config.max_promotions]:
         facets = sorted({facet for card in source_cards for facet in card.target_facets})
         items.append(
             PromotionItem(
                 source_id=source.source_id,
                 evidence_card_ids=tuple(sorted(item.card_id for item in source_cards)),
                 rationale=(
-                    f"Report-critical paper with {len(source_cards)} located evidence "
-                    f"cards across: {', '.join(facets) or 'unclassified facets'}."
+                    f"Report-critical paper with {len(cited)} cited and "
+                    f"{len(source_cards)} retained evidence cards across: "
+                    f"{', '.join(facets) or 'unclassified facets'}."
                 ),
             )
         )

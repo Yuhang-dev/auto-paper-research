@@ -37,8 +37,15 @@ replication, counter-evidence, missing context-length buckets, engineering
 measurements, and official implementation sources. Do not request more papers
 only to increase corpus size.
 
+When deterministic gaps are supplied, preserve their evidence boundary and
+priority. Use provisional topology to organize the search, while treating
+missing facets, single-source conclusions, experimental incomparability,
+engineering evidence, and freshness as the reasons for a pivot.
+
 ## Final output
 
 Return only the requested structured reasoning or synthesis schema. The caller
 validates independent sources and EvidenceCard references, then renders the final
-Markdown deterministically. Do not write Wiki pages or promotion approvals.
+Markdown deterministically. Provisional concepts and relation candidates may
+organize sections but cannot support report claims. Do not write Wiki pages or
+promotion approvals.

@@ -25,10 +25,14 @@ input.
 ## Extract
 
 - relevance and exclusion decision;
+- one source role: `survey`, `primary-study`, `benchmark`, `reproduction`,
+  `project`, or `background`;
 - likely method family and addressed facets;
 - possible contribution and limitations;
 - questions that require full-text confirmation;
 - whether the source merits deep reading.
+- provisional relation hints such as `variant-of`, `extends`, `implements`,
+  `evaluates`, `supports`, or `opposes` when the supplied text states them.
 
 ## Evidence boundary
 
@@ -43,6 +47,10 @@ input.
 - Prefer exclusion over forced relevance when the source is outside scope.
 - A survey may guide taxonomy and citation chasing, but primary studies should
   receive the scarce experimental Deep Read slots.
+- Relation hints are topology candidates. They never merge entities or count as
+  citation evidence.
+- A similar title or terminology is insufficient for `alias-of`; retain it as a
+  possible identity question for deterministic or human resolution.
 
 ## Output
 

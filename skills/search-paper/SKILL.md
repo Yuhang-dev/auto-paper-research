@@ -38,8 +38,9 @@ Before searching:
 4. Use `assets/search-run-template.yaml` for the search-run record.
 5. Read any supplied topic scope, seed-paper list, previous search run, or
    coverage report.
-6. Inspect relevant entries in `wiki/papers/`, `wiki/concepts/`, and
-   `wiki/benchmarks/`.
+6. In the Fast Research Loop, use only the supplied deterministic Wiki identity
+   index for duplicate checks; do not load Wiki page contents into the search
+   context.
 
 Treat `references/`, `assets/`, and `scripts/` paths as relative to this Skill
 directory. Treat `wiki/` and `research/` paths as relative to the repository
@@ -122,6 +123,11 @@ The matrix should normally include:
 
 Record the purpose and expected coverage facet for every query.
 
+When structured research gaps are supplied, target the three highest-priority
+open gaps. Keep at least one primary-paper query, use GitHub for a project gap,
+and include a disconfirming query when a candidate non-consensus hypothesis is
+still open.
+
 Do not create dozens of minor paraphrases before observing first-pass results.
 
 ### 5. Execute discovery search
@@ -177,6 +183,18 @@ Label each candidate:
 
 Use the rubric in `references/search-strategy.md` and include a short reason.
 
+Assign one provisional source role:
+
+- `survey`;
+- `primary-study`;
+- `benchmark`;
+- `reproduction`;
+- `project`;
+- `background`.
+
+The deterministic funnel applies role targets and fills missing roles by stable
+ranking. Do not change relevance scores merely to satisfy a quota.
+
 The label is a screening judgment based on metadata and, when available, the
 abstract. It is not an evidence-verification status.
 
@@ -196,6 +214,10 @@ After each pass, inspect:
 
 Use uncovered facets and repeated false positives to design the next pass. Do
 not broaden every facet at once.
+
+Treat orphan nodes as search hints only. A gap becomes actionable through
+missing evidence, independence, comparability, engineering coverage, or
+freshness rather than graph degree alone.
 
 Stop according to `references/search-strategy.md`. A zero-result query is not
 evidence that no relevant literature exists.
