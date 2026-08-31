@@ -5,6 +5,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+import urllib.parse
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -49,6 +50,7 @@ from research_harness.review_promotion import ReviewPromoter
 from research_harness.review_providers import (
     ReviewProviderRegistry,
     SemanticScholarProvider,
+    _semantic_scholar_request,
 )
 from research_harness.review_storage import ReviewArtifactStore
 
@@ -439,6 +441,39 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertEqual("10.0000/fixture", source.doi)
         self.assertEqual("Ada Example", source.authors[0])
         self.assertEqual("s2-fixture-paper", source.metadata["semantic_scholar_paper_id"])
+
+    def test_semantic_scholar_discovery_uses_bounded_bulk_search(self):
+        payload = json.dumps({"total": 0, "data": []}).encode("utf-8")
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return payload
+
+        with mock.patch(
+            "research_harness.review_providers.urllib.request.urlopen",
+            return_value=Response(),
+        ) as opened:
+            result = _semantic_scholar_request(
+                "long-context sparse-attention",
+                "fixture-s2-key",
+                limit=2,
+            )
+        self.assertEqual([], result["data"])
+        request = opened.call_args.args[0]
+        parsed = urllib.parse.urlsplit(request.full_url)
+        parameters = urllib.parse.parse_qs(parsed.query)
+        headers = {name.casefold(): value for name, value in request.header_items()}
+        self.assertEqual("/graph/v1/paper/search/bulk", parsed.path)
+        self.assertEqual(["2"], parameters["limit"])
+        self.assertEqual(["citationCount:desc"], parameters["sort"])
+        self.assertNotIn("authors", parameters["fields"][0])
+        self.assertEqual("fixture-s2-key", headers["x-api-key"])
 
     def test_evidence_and_synthesis_contracts_reject_untraceable_claims(self):
         with self.assertRaisesRegex(ValueError, "experimental conditions"):

@@ -82,8 +82,8 @@ EvidenceCard 等大对象保存在运行目录，不在每轮重复注入模型�
 统一 provider 在 `review_providers.py`：
 
 - DeepXiv：论文发现和元数据；
-- Semantic Scholar Academic Graph：可选的第二论文索引，用于补充发现、
-  citation count 和跨 provider 身份核对；
+- Semantic Scholar Academic Graph：可选的第二论文索引；按官方建议使用轻量
+  `paper/search/bulk` 补充发现、citation count 和跨 provider 身份核对；
 - arXiv：受控 PDF 下载和选择性文本提取；
 - Tavily：官方项目页、静态 Web 和反证发现；
 - GitHub REST：仓库元数据、README、license、版本和活跃度。
@@ -112,7 +112,7 @@ $env:GITHUB_TOKEN = Read-Host -Prompt "GitHub token (optional)" -MaskInput
 `S2_API_KEY` 也可作为兼容别名，但项目文档统一使用
 `SEMANTIC_SCHOLAR_API_KEY`。Key 仅从当前进程环境读取，不写入 run config、
 artifact、SQLite 或 Git。Semantic Scholar 请求在 provider 内串行并遵守默认每秒一次
-的 key 配额；单次失败按 provider 隔离，不会终止整轮。
+的 key 配额；第一轮只取检索所需的少量字段，单次失败按 provider 隔离，不会终止整轮。
 
 Fast 模型处理规划、screening 和 Skim；Reasoning 模型处理深读、EvidenceCard、
 反证判断和 synthesis。旧的 `HARNESS_MODEL / HARNESS_MODEL_BASE_URL /

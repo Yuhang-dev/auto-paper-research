@@ -239,9 +239,12 @@ def _semantic_scholar_request(
 ) -> Mapping[str, Any]:
     """Execute one bounded Semantic Scholar Academic Graph search."""
 
+    # Bulk search is the official recommendation for corpus discovery. Keep
+    # this first pass intentionally small; author/venue details are available
+    # from the retained paper or later evidence acquisition when needed.
     fields = (
-        "paperId,corpusId,title,abstract,year,authors,url,venue,"
-        "externalIds,openAccessPdf,citationCount,publicationDate"
+        "paperId,title,abstract,year,url,externalIds,openAccessPdf,"
+        "citationCount,publicationDate"
     )
     encoded = urllib.parse.urlencode(
         {
@@ -250,6 +253,7 @@ def _semantic_scholar_request(
             "query": re.sub(r"[-\u2010-\u2015]+", " ", query),
             "limit": min(max(1, limit), 100),
             "fields": fields,
+            "sort": "citationCount:desc",
         }
     )
     headers = {
@@ -259,7 +263,7 @@ def _semantic_scholar_request(
     if api_key:
         headers["x-api-key"] = api_key
     request = urllib.request.Request(
-        f"https://api.semanticscholar.org/graph/v1/paper/search?{encoded}",
+        f"https://api.semanticscholar.org/graph/v1/paper/search/bulk?{encoded}",
         headers=headers,
     )
     with urllib.request.urlopen(request, timeout=45) as response:
@@ -377,6 +381,7 @@ class SemanticScholarProvider:
                     metadata={
                         "semantic_scholar_paper_id": paper_id,
                         "semantic_scholar_corpus_id": row.get("corpusId"),
+                        "semantic_scholar_search_mode": "bulk",
                         "citation_count": row.get("citationCount"),
                         "external_ids": dict(external_ids),
                         "open_access_pdf": open_pdf_url,
