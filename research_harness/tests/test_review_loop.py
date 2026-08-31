@@ -10,6 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
+from langchain_core.exceptions import OutputParserException
+
 from research_harness.config import HarnessSettings, REPOSITORY_ROOT
 from research_harness.evidence_verification import (
     EntityVerificationDecision,
@@ -57,7 +59,7 @@ from research_harness.review_providers import (
     _semantic_scholar_paper_details,
 )
 from research_harness.review_storage import ReviewArtifactStore
-from research_harness.review_semantics import _web_card_supported
+from research_harness.review_semantics import _invoke_structured, _web_card_supported
 
 
 NOW = "2026-08-31T00:00:00Z"
@@ -104,6 +106,24 @@ class FakeFailingGitHubProvider:
     async def search(self, query: RetrievalQuery, *, limit: int):
         del query, limit
         raise RuntimeError("sanitized provider fixture failure")
+
+
+class ScriptedStructuredModel:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.calls = []
+
+    def with_structured_output(self, schema, *, method):
+        self.schema = schema
+        self.method = method
+        return self
+
+    def invoke(self, messages):
+        self.calls.append(tuple(messages))
+        output = self.outputs.pop(0)
+        if isinstance(output, BaseException):
+            raise output
+        return output
 
 
 class FakeReviewEngine:
@@ -323,6 +343,51 @@ class ReviewLoopTests(unittest.TestCase):
         skim = FakeReviewEngine().skim_source(source=_web_source(1), scope=self.scope)
         self.assertTrue(skim.provisional)
         self.assertFalse(skim.citation_eligible)
+
+    def test_evidence_extraction_repairs_invalid_structured_output_once(self):
+        valid = EvidenceExtraction(
+            source_id="paper:arxiv:2504.17768",
+            cards=(
+                EvidenceCard(
+                    card_id="card:repair-fixture",
+                    source_id="paper:arxiv:2504.17768",
+                    source_url="https://arxiv.org/abs/2504.17768",
+                    source_version="v1",
+                    source_sha256="a" * 64,
+                    statement="The source reports a located sparse-attention result.",
+                    attribution="author",
+                    evidence_type="experiment",
+                    status="located",
+                    conditions={"context": "32K"},
+                    locator=EvidenceLocator(kind="pdf-page", value="3"),
+                ),
+            ),
+        )
+        invalid = valid.model_dump(mode="json")
+        invalid["cards"][0]["status"] = "verified-by-model"
+        model = ScriptedStructuredModel(
+            [
+                OutputParserException(
+                    "EvidenceExtraction validation failed",
+                    llm_output=json.dumps(invalid),
+                ),
+                valid,
+            ]
+        )
+
+        result = _invoke_structured(
+            model,
+            EvidenceExtraction,
+            system="Extract located evidence.",
+            payload={"source_id": valid.source_id},
+            repair_once=True,
+            repair_limits={"cards": 8},
+        )
+
+        self.assertEqual(valid, result)
+        self.assertEqual(2, len(model.calls))
+        self.assertIn("Add no facts", model.calls[1][0].content)
+        self.assertIn("literal_error", model.calls[1][1].content)
 
     def test_deep_read_prefers_primary_studies_and_rejects_secondary_mirrors(self):
         config = self._config(run_id="selection-run")
@@ -822,6 +887,35 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertIn("## 10. 证据索引", report)
         self.assertIn("[E1](#e1)", report)
         self.assertEqual(wiki_before, (self.root / "wiki" / "sentinel.md").read_bytes())
+
+    def test_manual_synthesis_refreshes_reasoning_after_deep_read_stop(self):
+        config = self._config(
+            run_id="manual-synthesis-run",
+            thread_id="manual-synthesis-thread",
+        ).model_copy(update={"stop_after": "deep-read"})
+        engine = FakeReviewEngine()
+        with ReviewController(
+            self.settings,
+            config=config,
+            scope=self.scope,
+            semantic_engine=engine,
+            providers=self._providers(config),
+        ) as controller:
+            stopped = controller.start()
+            synthesized = controller.synthesize_now()
+
+        store = ReviewArtifactStore(self.settings, config)
+        self.assertEqual("stop-after-deep-read", stopped["stop_reason"])
+        self.assertTrue(synthesized["completed"])
+        self.assertEqual(1, len(store.claims()))
+        self.assertEqual(1, len(store.assessments()))
+        self.assertTrue(store.report_path.is_file())
+        self.assertEqual("synthesis", store.trajectory()[-1].stage)
+        self.assertEqual("manual-synthesis", store.trajectory()[-1].stop_reason)
+        self.assertEqual(
+            store.trajectory()[-1].sequence,
+            synthesized["trajectory_sequence"],
+        )
 
     def test_keyboard_interrupt_checkpoint_resumes_only_unfinished_batch(self):
         config = self._config(run_id="interrupt-run", thread_id="interrupt-thread")

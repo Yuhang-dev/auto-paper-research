@@ -141,7 +141,10 @@ fingerprint；API key 从不进入 config、artifact 或 SQLite checkpoint。
 
 - Skim 中未经全文确认的数字会在进入 reasoning 前被移除；
 - 聚合镜像和来源身份未知的 Web 页面不能产生 EvidenceCard；
-- 静态官方 Web 页最多保留 5 张卡片，只能支持页面级作者陈述或文档事实，
+- 单篇 PDF、repository README 和静态官方 Web 页分别最多保留 8、6、4 张卡片；
+- EvidenceExtraction schema 校验失败时执行一次有界修复，修复过程保留原输出中的
+  事实和 locator，并移除格式无效或不完整的条目；
+- 静态官方 Web 页支持页面级作者陈述或文档事实，
   不能代替 PDF 的定量实验结果；
 - 数字必须带实验条件；
 - locator 和 content hash 必须存在；

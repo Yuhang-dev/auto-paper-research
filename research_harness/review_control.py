@@ -1252,23 +1252,59 @@ class ReviewController:
         state = self.get_state().values
         if not state:
             raise ValueError("Review synthesis requires an existing checkpoint")
-        readiness = self.store.readiness() or review_readiness(
+        selected = set(state.get("selected_skim_ids") or ())
+        skims = tuple(
+            item
+            for item in self.store.skims()
+            if not selected or item.source_id in selected
+        )
+        cards = self.store.cards()
+        claims = self.store.claims()
+        uncertainties = self.store.uncertainties()
+        assessments = self.store.assessments()
+        try:
+            update = self.semantic_engine.reason(
+                scope=self.scope,
+                skims=skims,
+                cards=cards,
+                claims=claims,
+                uncertainties=uncertainties,
+            )
+            claims, uncertainties, assessments = _merge_reasoning(
+                update=update,
+                existing_claims=claims,
+                existing_uncertainties=uncertainties,
+                existing_assessments=assessments,
+                cards=cards,
+            )
+            self.store.write_claims(claims)
+            self.store.write_uncertainties(uncertainties)
+            self.store.write_assessments(assessments)
+        except Exception as exc:
+            _record_error(
+                self.store,
+                stage="assessment",
+                recurrence_key="review-assessment:manual-synthesis",
+                observed=f"{type(exc).__name__}: {exc}",
+            )
+        readiness = review_readiness(
             required_facets=self.scope.required_facets,
-            cards=self.store.cards(),
-            claims=self.store.claims(),
-            uncertainties=self.store.uncertainties(),
-            assessments=self.store.assessments(),
+            cards=cards,
+            claims=claims,
+            uncertainties=uncertainties,
+            assessments=assessments,
             saturated=search_saturated(self.store.round_gains()),
         )
+        self.store.write_readiness(readiness)
         try:
             draft = self.semantic_engine.synthesize(
                 scope=self.scope,
                 config=self.config,
                 sources=self.store.sources(),
-                cards=self.store.cards(),
-                claims=self.store.claims(),
-                uncertainties=self.store.uncertainties(),
-                assessments=self.store.assessments(),
+                cards=cards,
+                claims=claims,
+                uncertainties=uncertainties,
+                assessments=assessments,
                 readiness=readiness,
             )
         except Exception as exc:
@@ -1290,6 +1326,17 @@ class ReviewController:
             created_at=_utc_now(),
         )
         self.store.write_promotion_manifest(manifest)
+        sequence = _append_trajectory(
+            self.store,
+            state,
+            stage="synthesis",
+            action="Refresh evidence-based understanding and render the review.",
+            understanding_change=(
+                f"Rendered {len(cards)} evidence cards into a review with "
+                f"{len(claims)} understanding claims; readiness={readiness.ready}."
+            ),
+            stop_reason="manual-synthesis",
+        )
         self.store.write_report(
             render_review_markdown(
                 scope=self.scope,
@@ -1312,6 +1359,7 @@ class ReviewController:
             "phase": "completed",
             "completed": True,
             "stop_reason": "manual-synthesis",
+            "trajectory_sequence": sequence,
             "report_path": self.store.relative(self.store.report_path),
             "promotion_manifest_path": self.store.relative(self.store.promotion_path),
         }

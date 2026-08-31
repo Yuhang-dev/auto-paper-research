@@ -41,11 +41,11 @@ Fast Research Loop
 ```
 
 标准漏斗是 `50 → 20 Skim → 10 Deep Read → 最多 6 篇晋升`，Smoke 是
-`8 → 4 → 2 → 0`。Fast Loop 不读取完整 Wiki 进模型上下文，也不写正式 Wiki。
-论文发现默认使用 DeepXiv；设置 `SEMANTIC_SCHOLAR_API_KEY` 后，只对进入 Deep
-Read 的少量论文补充 Semantic Scholar citation 和外部 ID，不执行 S2 大页批量发现。
-Deep Read 不复用检索来源比例：Smoke 优先保留 2 篇原始论文，standard 至少优先
-保留 6 篇；ResearchGate、Academia.edu 等镜像只作导航，不能产生正式证据。
+`8 → 4 → 2 → 0`。Fast Loop 使用确定性 Wiki ID 索引去重；正式 Wiki 由 promotion
+和 publish 阶段更新。论文发现默认使用 DeepXiv；设置
+`SEMANTIC_SCHOLAR_API_KEY` 后，系统为进入 Deep Read 的少量论文补充 citation 和
+外部 ID。Deep Read 的来源策略优先保留原始论文：Smoke 2 篇，standard 至少 6 篇；
+ResearchGate、Academia.edu 等镜像用于导航，正式证据来自原始论文或官方来源。
 使用说明见 `docs/REVIEW_FIRST_HARNESS.md`。
 
 项目现在用 LangGraph 作为编排层。确定性的 Wiki parser、resolver、validator、
@@ -65,7 +65,7 @@ observe result / count failure
    └────────────────────→ agent
 ```
 
-外层保留一个不调用模型、不修改来源文件的 V0 诊断步：
+外层保留一个确定性、只读的 V0 诊断步：
 
 ```text
 START
@@ -106,11 +106,11 @@ inspect → evaluate → check_done
                      └──────────────────↺
 ```
 
-系统不使用 LLM Router。Outer Loop 只在显式 action table 中选择 `search / ingest /
-verify / revise_evidence / analyze_claims`；每个动作再加载对应 Skill。模型负责 query 语义规划、候选
+系统采用显式 action table，在 `search / ingest / verify / revise_evidence /
+analyze_claims` 中选择动作并加载对应 Skill。模型负责 query 语义规划、候选
 筛选、论文结构化抽取、证据语义比较和 claim 条件对齐；程序负责 ID、路径、下载边界、
-页码和数值预检、schema、状态迁移、原子发布与回滚。网络未授权或凭证/前置条件缺失时，
-图会返回结构化 `ActionResult` 并安全停止。
+页码和数值预检、schema、状态迁移、原子发布与回滚。网络授权、凭证和前置条件进入
+执行前检查；检查结果记录在结构化 `ActionResult` 中。
 
 状态分为三层：
 
@@ -126,10 +126,10 @@ SQLite 默认位置：
 <当前仓库>\.harness\research-harness.sqlite3
 ```
 
-`HARNESS_DB_PATH` 可以位于任意可写盘符；配置层只要求使用持久化文件以及 `.db`、
+`HARNESS_DB_PATH` 可以位于任意可写盘符；配置层要求使用持久化文件以及 `.db`、
 `.sqlite` 或 `.sqlite3` 后缀。SQLite、WAL 和 SHM 文件均已加入 `.gitignore`。
 
-模型上下文不是完整 checkpoint 历史，而是：
+每轮模型上下文由以下内容组成：
 
 ```text
 system policy
@@ -137,7 +137,7 @@ system policy
   + 按 token budget 保留的最近消息
 ```
 
-完整线程状态仍保存在 SQLite，可以恢复，但不会在每轮全部发送给模型。
+SQLite 保存完整可恢复线程状态；模型每轮接收经过预算裁剪的上下文。
 
 ### SkillRegistry V0
 
@@ -155,24 +155,24 @@ Skill 根目录与 SKILL.md 路径
 references / assets / scripts / agents 资源清单
 ```
 
-`SKILL.md` 的 frontmatter 和正文会被解析；supporting resources 只在明确读取时
-加载，不会全部塞进模型上下文。Registry 会拒绝目录名与 Skill 名不一致、损坏的
-frontmatter、路径穿越和逃逸 Skill 根目录的资源。
+`SKILL.md` 的 frontmatter 和正文会被解析；supporting resources 按需加载。
+Registry 校验目录名、Skill 名、frontmatter 和资源路径，并把资源访问限定在 Skill
+根目录。
 
-当前边界刻意保持简单：
+当前实现范围：
 
 ```text
-已实现：SkillRegistry + 按需资源读取 + 旧 Durable executor + 独立 Review synthesis graph
-未实现：LLM Skill Router / 通用 SkillExecutor / 任意网页浏览 / 自动 PPT synthesis
+运行中：SkillRegistry + 按需资源读取 + Durable executor + 独立 Review synthesis graph
+后续项：通用 SkillExecutor / 浏览器工作流 / 自动 PPT synthesis
 ```
 
-Registry 本身仍只负责发现和检查。Outer Loop 使用显式 action table：`search`
+Registry 负责发现和检查。Outer Loop 使用显式 action table：`search`
 绑定 query planning、DeepXiv 和候选筛选；`ingest` 绑定受控 PDF 交接和
 `PaperIngestPipeline`；`verify` 绑定来源复核与 guarded lifecycle transition；
-`revise_evidence` 只处理 verifier 已定位的事实矛盾或 locator 缺陷，最多两轮，修订后退回
+`revise_evidence` 处理 verifier 已定位的事实矛盾或 locator 缺陷，最多两轮，修订后退回
 `draft` 并等待独立复验；
-`analyze_claims` 只消费 verified evidence 并创建待独立复核的 assessment。没有通用
-Skill 解释器，也不会让模型自行选择任意脚本。
+`analyze_claims` 消费 verified evidence 并创建待独立复核的 assessment。每个动作由
+程序绑定确定的 Skill 和脚本。
 
 ### Research contracts and Done gate
 
@@ -191,14 +191,14 @@ Skill 解释器，也不会让模型自行选择任意脚本。
   `supported-consensus / contested / insufficient-evidence`；
 - `DoneCriteria`：Coverage、Quality、Saturation 和 Budget 的确定性门槛。
 
-DoneCriteria 0.2 只允许 `evidence_facet_coverage` 满足 facet 门槛。候选覆盖只用于
+DoneCriteria 0.2 使用 `evidence_facet_coverage` 判断 facet 门槛。候选覆盖用于
 路由：候选缺失走 `search`，已有候选但无证据走 `ingest`，已有 draft 证据走
 `verify`。完成条件还要求达到逐 context/metric 的证据数量、完成 non-consensus
-review，并且不存在 open blocking gap。
+review，并且 `open_blocking_gap_count == 0`。
 
-`control_passes` 只统计观察/评估轮次；`research_iterations` 只在动作真正执行时
-增加，并用于 `max_research_iterations` 预算。CLI 不再接受人工填写的
-`action_attempted` 或 `tool_calls_delta`。
+`control_passes` 统计观察/评估轮次；`research_iterations` 在动作真正执行时增加，
+并用于 `max_research_iterations` 预算。CLI 从实际运行计算 `action_attempted` 和
+`tool_calls_delta`。
 
 项目当前阈值在：
 
@@ -206,13 +206,13 @@ review，并且不存在 open blocking gap。
 research/long-context-sparse-models/done-criteria.yaml
 ```
 
-该文件当前是 `status: draft`。即使所有数值门槛满足，`check_done()` 也不会允许
-自动 `finish`；必须由调研负责人审核后显式改成 `active`。
+该文件当前是 `status: draft`，终止决定由调研负责人审核。负责人确认门槛后将状态
+显式改成 `active`，`check_done()` 随即启用自动 `finish`。
 
 当前真实快照显示：1 个 planned search run、8 个 planned query、0 个候选、
 1 篇 legacy draft Wiki paper、0 个结构化 experiment/claim/assessment；当前 10 个
 facet 的 candidate coverage 与 evidence coverage 均为 `missing`。因此最高优先级
-动作仍是执行已有 Q01–Q08，而不是继续凭空规划查询。
+动作是执行已有 Q01–Q08，以真实检索结果驱动下一轮查询。
 
 ### Install
 
@@ -229,8 +229,7 @@ Requests 2.x 和 pypdf 6.16.2。
 
 ### Configure
 
-非敏感配置参考 `.env.example`。程序不会自动加载该文件；建议在当前
-PowerShell 会话中设置：
+非敏感配置参考 `.env.example`。运行配置从当前 PowerShell 会话读取：
 
 ```powershell
 $env:HARNESS_MODEL = "openai:<本地服务暴露的模型 ID>"
@@ -238,11 +237,9 @@ $env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
 $env:OPENAI_API_KEY = Read-Host -Prompt "Local model API key" -MaskInput
 ```
 
-Harness 会显式构造 `ChatOpenAI(model, base_url, api_key)`，不会再依赖 LangChain 猜测
-provider。`HARNESS_MODEL` 必须保留 `openai:` 前缀，冒号后是本地服务 `/v1/models`
-返回的精确模型 ID。本地 HTTP 调用仍属于 socket I/O，运行时必须显式传
-`--allow-network`。不要把模型或 DeepXiv Key 写入 `.env`、YAML、SQLite research
-memory、命令参数或日志。
+Harness 显式构造 `ChatOpenAI(model, base_url, api_key)`。`HARNESS_MODEL` 使用
+`openai:` 前缀，冒号后填写服务端接受的精确模型 ID。`--allow-network` 授权本地或
+远程 socket I/O。模型与 DeepXiv Key 保留在当前进程环境中。
 
 若使用 DeepSeek 官方 endpoint：
 
@@ -252,13 +249,12 @@ $env:HARNESS_MODEL_BASE_URL = "https://api.deepseek.com"
 $env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
 ```
 
-Harness 不再按域名写死 DeepSeek 模型名；模型是否存在以及是否支持 JSON mode、
-tool calling 由目标服务端和运行前能力探测决定。完整 endpoint 优先级和能力要求见
+目标服务端和运行前能力探测共同确认 DeepSeek 模型名、JSON mode 与 tool calling
+支持。完整 endpoint 优先级和能力要求见
 `docs/OPENAI_COMPATIBLE_MODEL.md`。
 
-DeepXiv SDK 只在获准的非 dry-run 调用中延迟导入；其 tiktoken 编码缓存默认
-定向到 `<当前仓库>\.harness\tiktoken-cache`，离线诊断和测试不会为了
-导入 SDK 而联网。
+DeepXiv SDK 在获准的正式检索中延迟导入；其 tiktoken 编码缓存默认
+定向到 `<当前仓库>\.harness\tiktoken-cache`；离线诊断和测试使用本地依赖。
 
 ### Run
 
@@ -280,7 +276,7 @@ D:\anaconda3\python.exe -B -m research_harness `
   --deadline-seconds 120 --provider-max-retries 0
 ```
 
-Canary 只写 `.harness/canary/<run-id>/`，不修改正式 Wiki、Search Run 或主 SQLite。
+Canary 写入 `.harness/canary/<run-id>/`，正式 Wiki、Search Run 和主 SQLite 保持原值。
 
 执行一个可恢复任务：
 
@@ -297,8 +293,8 @@ D:\anaconda3\python.exe -B -m research_harness chat `
   --thread sparse-review-01 --allow-network
 ```
 
-Socket I/O 默认关闭，包括 localhost 模型。只有显式传入 `--allow-network` 才会调用
-配置的模型 endpoint；DeepXiv 非 dry-run 检索还必须同时配置 `DEEPXIV_TOKEN`：
+`--allow-network` 开启 socket I/O，包括 localhost 模型调用；DeepXiv 正式检索同时
+读取当前进程的 `DEEPXIV_TOKEN`：
 
 ```powershell
 D:\anaconda3\python.exe -B -m research_harness run `
@@ -366,7 +362,7 @@ D:\anaconda3\python.exe -B -m research_harness research resume `
   long-context-sparse-models --thread outer-v1 --allow-network
 ```
 
-只有需要继续中断时尚未完成的 LangGraph pending node 时，才使用精确 checkpoint 模式：
+需要继续中断时的 LangGraph pending node 时，使用精确 checkpoint 模式：
 
 ```powershell
 D:\anaconda3\python.exe -B -m research_harness research resume `
@@ -385,15 +381,14 @@ node，并要求当前 `--allow-network` 与中断时的授权完全一致。已
 local_pdf_path: sources/papers/arxiv-<id>.pdf
 ```
 
-也可以人工放置 PDF 并设置该路径。自动下载只支持显式选中的 arXiv candidate，并限制
+也可以人工放置 PDF 并设置该路径。自动下载面向显式选中的 arXiv candidate，并限制
 HTTPS host、文件类型、目标目录和最大字节数。远程 query planning、screening、ingest、
-verify、revise_evidence 与 analyze_claims 均受同一次 `--allow-network` 授权；未配置模型时语义动作不会
-进入 executor capability set。发布完成后 Harness 会把 candidate 改为 `ingested` 并
+verify、revise_evidence 与 analyze_claims 共用本次 `--allow-network` 授权；模型配置
+完成后，语义动作进入 executor capability set。发布完成后 Harness 会把 candidate 改为 `ingested` 并
 记录 canonical paper ID，避免下一轮重复处理同一 handoff。
 
-Research memory 只接受紧凑的 `observation / decision / preference /
-open-question`。没有 evidence ID 的内容会标为 `unverified-note`，不会自动升级为
-Wiki 事实。
+Research memory 保存紧凑的 `observation / decision / preference / open-question`。
+带 evidence ID 的内容可进入证据流程；其余内容保留为 `unverified-note`。
 
 ## Current pipeline
 
@@ -421,8 +416,8 @@ research question
   -> verified assessment or explicit unresolved result
 ```
 
-检索结果首先是 `candidate`，不能直接当作论文结论。只有读取论文正文并走
-证据流程后，才能形成可验证的 Wiki claim。
+检索结果首先形成 `candidate`。论文正文和证据流程将入选 candidate 转换为可验证的
+Wiki claim。
 
 ## Skills
 
@@ -433,16 +428,15 @@ research question
 - `skills/analyze-claims/`：比较 verified claims，生成共识/争议/证据不足 assessment。
 
 `ingest-paper` 已迁移到 Wiki V0.2，并通过严格 Pydantic Draft、页级 locator、typed
-entity 复用和 guarded Writer 接入 Outer Loop。模型不能直接写 Markdown；拟写页面先在
-shadow Wiki 重建图并通过零 schema error 校验，再逐页原子发布。普通异常以及可捕获的
-`KeyboardInterrupt` / `SystemExit` 会回滚整个页面批次并继续抛出原异常；操作系统强杀或
-断电不属于该进程内回滚保证。重复摄取同一 Draft 为 no-change。现有 legacy 页面继续兼容
-读取，V1 默认不会覆盖人工 source page。
+entity 复用和 guarded Writer 接入 Outer Loop。模型输出结构化 Draft；Writer 在 shadow
+Wiki 重建图并通过零 schema error 校验，再逐页原子发布。普通异常以及可捕获的
+`KeyboardInterrupt` / `SystemExit` 会回滚整个页面批次并继续抛出原异常。重复摄取同一
+Draft 为 no-change；人工 source page 保持原值。
 
 ## Wiki Engine V0.2
 
-Wiki 是调研 Harness 的领域持久状态层，不是对话记忆。Markdown/YAML 页面是
-真源；`wiki/_generated/` 仅包含可删除、可重建的 JSON 索引。
+Wiki 保存调研 Harness 的领域持久状态，SQLite 保存对话与运行记忆。Markdown/YAML
+页面是真源；`wiki/_generated/` 包含可删除、可重建的 JSON 索引。
 
 当前 schema 支持八类实体：
 
@@ -450,9 +444,9 @@ Wiki 是调研 Harness 的领域持久状态层，不是对话记忆。Markdown/
 paper  method  experiment  claim  concept  benchmark  model  assessment
 ```
 
-`paper / experiment / claim` 可用 `facets` 显式声明其证据覆盖维度。只有 verified
-实体会形成 `covered`；draft 实体只形成 `partial`。`assessment` 是 non-consensus
-研究真源，不存进 controller state，也不要求一定产出争议结论。
+`paper / experiment / claim` 可用 `facets` 显式声明其证据覆盖维度。verified 实体
+形成 `covered`，draft 实体形成 `partial`。`assessment` 作为 non-consensus 研究真源，
+结果可以是 consensus、contested 或 insufficient-evidence。
 
 实体以稳定 ID 标识，例如 `paper:longlora`；正文链接使用
 `[[paper:longlora]]`，有语义的科研关系写入 YAML `relations`。完整合约见
@@ -489,14 +483,13 @@ conda run -n base python -B -m tools.wiki stats
 conda run -n base python -B -m tools.wiki validate --strict
 ```
 
-普通 `validate` 在有 WARNING 时仍返回成功，只有 ERROR 会失败；`--strict`
-会让 WARNING 也导致非零退出码。`tools.wiki` CLI 不暴露任意写入或迁移命令；
-Harness 的 ingest、verify 和 analyze 流程则会通过 guarded Writer 在 shadow validation
-通过后原子修改正式 Wiki 页面。
+普通 `validate` 将 ERROR 映射为非零退出码；`--strict` 同时把 WARNING 映射为非零
+退出码。`tools.wiki` CLI 提供查询与校验能力；Harness 的 ingest、verify 和 analyze
+流程通过 guarded Writer，在 shadow validation 通过后原子修改正式 Wiki 页面。
 
 ## DeepXiv environment
 
-项目使用 Conda `(base)` 中的 `deepxiv-sdk`，不使用 DeepXiv MCP。
+项目直接使用 Conda `(base)` 中的 `deepxiv-sdk`。
 
 检查安装：
 
@@ -504,8 +497,8 @@ Harness 的 ingest、verify 和 analyze 流程则会通过 guarded Writer 在 sh
 conda run -n base python -m pip show deepxiv-sdk
 ```
 
-凭据只通过当前 shell 的 `DEEPXIV_TOKEN` 传递。不要把 Key 写入仓库、
-YAML、命令参数或日志。PowerShell 7 可用遮罩输入：
+凭据通过当前 shell 的 `DEEPXIV_TOKEN` 传递，仓库、YAML、命令参数和日志保存非秘密
+配置。PowerShell 7 可用遮罩输入：
 
 ```powershell
 $env:DEEPXIV_TOKEN = Read-Host -Prompt "DeepXiv Token" -MaskInput
@@ -565,19 +558,19 @@ D:\anaconda3\python.exe -B -m unittest discover `
 
 ## LoopEngineer rule
 
-单次检索噪声先记在 run 内。只有稳定、可复现、跨 run 重复的问题，才升级为：
+单次检索噪声记录在 run 内。稳定、可复现、跨 run 重复的问题升级为：
 
 - Error Book 条目；
 - Skill 决策规则；
 - 校验器；
 - 可复用脚本或函数。
 
-Skill 不因一次异常结果自动改写自身。
+Skill 修改由重复证据和人工确认共同触发。
 
 ## Deferred Wiki batch
 
 较大规模的首轮调研使用 `research canary ... --defer-wiki`：先检索、筛选并把多篇
-论文保存为结构化 staged drafts，Wiki 保持不变。随后用
+论文保存为结构化 staged drafts，Wiki 保持当前版本。随后用
 `research publish-staged ... --target canary` 在隔离 Wiki 验收；确认后再显式使用
 `--target formal`。完整 PowerShell 命令见
 `docs/CANARY_AND_EVALUATION.md` 的“延迟 Wiki 的批量调研”。

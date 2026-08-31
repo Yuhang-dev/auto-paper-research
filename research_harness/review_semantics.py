@@ -7,9 +7,10 @@ import re
 from collections import Counter, defaultdict
 from typing import Any, Mapping, Optional, Protocol, Sequence, Type, TypeVar
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .model_client import ReviewModelBundle, create_profile_chat_model
 from .review_logic import (
@@ -46,9 +47,9 @@ from .skill_registry import SkillRegistry, SkillSpec
 
 T = TypeVar("T", bound=BaseModel)
 MATERIAL_CARD_LIMITS = {
-    "pdf-text": 20,
-    "repository-readme": 8,
-    "web-content": 5,
+    "pdf-text": 8,
+    "repository-readme": 6,
+    "web-content": 4,
 }
 
 
@@ -151,21 +152,145 @@ def _invoke_structured(
     *,
     system: str,
     payload: Mapping[str, Any],
+    repair_once: bool = False,
+    repair_limits: Optional[Mapping[str, int]] = None,
 ) -> T:
     structured = model.with_structured_output(schema, method="json_mode")
-    result = structured.invoke(
-        [
-            SystemMessage(content=system),
-            HumanMessage(
-                content=json.dumps(
-                    {**payload, "output_json_schema": schema.model_json_schema()},
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            ),
-        ]
+    messages = [
+        SystemMessage(content=system),
+        HumanMessage(
+            content=json.dumps(
+                {**payload, "output_json_schema": schema.model_json_schema()},
+                ensure_ascii=False,
+                indent=2,
+            )
+        ),
+    ]
+
+    def invoke_once(selected_messages: Sequence[Any]) -> T:
+        result = structured.invoke(list(selected_messages))
+        return result if isinstance(result, schema) else schema.model_validate(result)
+
+    initial_failure: OutputParserException | ValidationError
+    try:
+        return invoke_once(messages)
+    except (OutputParserException, ValidationError) as initial_error:
+        if not repair_once:
+            raise
+        initial_failure = initial_error
+
+    repair_source, validation_errors = _structured_failure_details(
+        schema,
+        initial_failure,
     )
-    return result if isinstance(result, schema) else schema.model_validate(result)
+    if isinstance(repair_source, Mapping):
+        repair_source = dict(repair_source)
+        for field, limit in (repair_limits or {}).items():
+            value = repair_source.get(field)
+            if isinstance(value, list):
+                repair_source[field] = value[:limit]
+        try:
+            return schema.model_validate(repair_source)
+        except ValidationError:
+            pass
+
+    repair_messages = [
+        SystemMessage(
+            content=(
+                f"Repair one invalid {schema.__name__} object. Preserve facts and "
+                "locators already present in the original output. Remove invalid or "
+                "extra values and drop incomplete entries. Add no facts, measurements, "
+                "locations, or cards. Return only the repaired structured object."
+            )
+        ),
+        HumanMessage(
+            content=json.dumps(
+                {
+                    "task": f"Repair the previous {schema.__name__} output.",
+                    "validation_errors": validation_errors,
+                    "repair_limits": dict(repair_limits or {}),
+                    "original_output": repair_source,
+                    "output_json_schema": schema.model_json_schema(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        ),
+    ]
+    try:
+        return invoke_once(repair_messages)
+    except (OutputParserException, ValidationError) as repair_error:
+        _source, repair_errors = _structured_failure_details(schema, repair_error)
+        compact = json.dumps(repair_errors[:8], ensure_ascii=False)
+        raise ValueError(
+            f"{schema.__name__} output failed initial validation and one repair: "
+            f"{compact}"
+        ) from repair_error
+
+
+def _structured_failure_details(
+    schema: Type[T],
+    error: OutputParserException | ValidationError,
+) -> tuple[Any, list[dict[str, Any]]]:
+    if isinstance(error, OutputParserException):
+        raw_output = error.llm_output
+        source: Any = raw_output
+        if raw_output:
+            try:
+                source = json.loads(raw_output)
+            except (TypeError, json.JSONDecodeError) as json_error:
+                return source, [
+                    {
+                        "loc": [],
+                        "type": "json_invalid",
+                        "msg": str(json_error),
+                    }
+                ]
+        else:
+            return None, [
+                {
+                    "loc": [],
+                    "type": "output_parser_error",
+                    "msg": "structured-output parser returned no recoverable output",
+                }
+            ]
+    else:
+        source = None
+
+    if source is not None:
+        try:
+            schema.model_validate(source)
+        except ValidationError as validation_error:
+            error = validation_error
+        else:
+            return source, [
+                {
+                    "loc": [],
+                    "type": "output_parser_error",
+                    "msg": "parser rejected an otherwise schema-valid object",
+                }
+            ]
+
+    if isinstance(error, ValidationError):
+        return source, [
+            {
+                "loc": list(item.get("loc", ())),
+                "type": str(item.get("type", "value_error")),
+                "msg": str(item.get("msg", "invalid value")),
+            }
+            for item in error.errors(
+                include_url=False,
+                include_context=False,
+                include_input=False,
+            )
+        ]
+    return source, [
+        {
+            "loc": [],
+            "type": "output_parser_error",
+            "msg": "structured-output parser rejected the response",
+        }
+    ]
 
 
 def _skill_system(skill: SkillSpec, task: str) -> str:
@@ -338,6 +463,7 @@ class LangChainReviewSemanticEngine:
                     "do_not_infer_results": True,
                 },
             },
+            repair_once=True,
         )
         expected = {item.source_id for item in sources}
         returned = {item.source_id for item in result.screenings}
@@ -457,6 +583,7 @@ class LangChainReviewSemanticEngine:
                     "unsupported_disagreement_result": "insufficient-evidence",
                 },
             },
+            repair_once=True,
         )
         known_cards = {item.card_id: item for item in cards}
         for assessment in result.assessments:
@@ -513,8 +640,15 @@ class LangChainReviewSemanticEngine:
                     "numeric_results_require_conditions": True,
                     "locator_required": True,
                     "maximum_cards": maximum_cards,
+                    "atomicity": (
+                        "Keep one metric or one qualitative conclusion per card. "
+                        "Select the highest-value cards instead of combining results "
+                        "to fill the card budget."
+                    ),
                 },
             },
+            repair_once=True,
+            repair_limits={"cards": maximum_cards},
         )
         if result.source_id != source.source_id:
             raise ValueError("evidence extractor returned the wrong source_id")
@@ -660,6 +794,7 @@ class LangChainReviewSemanticEngine:
                     "do_not_write_markdown": True,
                 },
             },
+            repair_once=True,
         )
         normalized = _downgrade_unsupported_synthesis(draft, cards)
         validate_synthesis_references(
@@ -844,15 +979,43 @@ def render_review_markdown(
         lines.append("- 尚未形成满足独立来源条件的非共识判断。")
     lines.extend(["", "## 8. 未解决问题", ""])
     open_questions = list(draft.open_questions)
-    open_questions.extend(
-        item.question for item in uncertainties if item.status != "resolved"
+    normalized_scope_question = " ".join(scope.question.split()).casefold()
+    generic_uncertainty = re.compile(
+        r"^what evidence is required to explain .+\?$", re.IGNORECASE
     )
-    for question in dict.fromkeys(open_questions):
+    for item in uncertainties:
+        if item.status == "resolved":
+            continue
+        normalized = " ".join(item.question.split())
+        if normalized.casefold() == normalized_scope_question:
+            continue
+        if generic_uncertainty.fullmatch(normalized):
+            continue
+        open_questions.append(item.question)
+    unique_open_questions = tuple(dict.fromkeys(open_questions))
+    for question in unique_open_questions:
         lines.append(f"- {question}")
-    if not open_questions:
+    if not unique_open_questions:
         lines.append("- 当前没有记录到开放问题。")
     lines.extend(["", "## 9. 调研局限", ""])
-    limitations = [*draft.limitations, *readiness.reasons]
+    readiness_reason_labels = {
+        "search has not reached understanding-level saturation": "检索尚未达到理解层饱和。",
+    }
+    rendered_readiness_reasons = []
+    for reason in readiness.reasons:
+        if reason.startswith("missing evidence facets: "):
+            rendered_readiness_reasons.append(
+                "缺失证据维度：" + reason.removeprefix("missing evidence facets: ")
+            )
+        elif reason.startswith("open blocking uncertainties: "):
+            rendered_readiness_reasons.append(
+                "仍有阻塞问题：" + reason.removeprefix("open blocking uncertainties: ")
+            )
+        else:
+            rendered_readiness_reasons.append(
+                readiness_reason_labels.get(reason, reason)
+            )
+    limitations = [*draft.limitations, *rendered_readiness_reasons]
     for item in dict.fromkeys(limitations):
         lines.append(f"- {item}")
     if not limitations:

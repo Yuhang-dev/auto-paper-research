@@ -441,7 +441,7 @@ class EvidenceCard(ReviewModel):
 
 class EvidenceExtraction(ReviewModel):
     source_id: str
-    cards: Tuple[EvidenceCard, ...] = Field(default=(), max_length=20)
+    cards: Tuple[EvidenceCard, ...] = Field(default=(), max_length=8)
     source_limitations: Tuple[str, ...] = ()
     unresolved_questions: Tuple[str, ...] = ()
 

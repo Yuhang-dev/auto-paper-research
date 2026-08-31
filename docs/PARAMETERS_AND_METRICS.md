@@ -146,6 +146,12 @@ V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 
 | `max_search_rounds` | I | 1 | 3 |
 | `max_queries` | I | 3 | 12 |
 | network / skim / deep-read concurrency | I | 4 / 2 / 2 | 4 / 2 / 2 |
+| EvidenceCard per source: PDF / repository / Web | I | 8 / 6 / 4 | 8 / 6 / 4 |
+| EvidenceExtraction schema repair attempts | I | 1 | 1 |
+
+Evidence extraction limits each source to a compact set of high-value cards. A schema-invalid
+model response receives one bounded repair pass that may remove invalid or incomplete entries
+while preserving the facts and locators already present in the original response.
 
 Review readiness 是计算结果，不可通过 YAML 直接填写：
 
