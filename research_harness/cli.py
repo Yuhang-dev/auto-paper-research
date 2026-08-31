@@ -468,6 +468,7 @@ def _doctor(settings: HarnessSettings, output_format: str) -> int:
         "langchain-openai",
         "deepxiv-sdk",
         "tavily-python",
+        "requests",
         "pydantic",
     ):
         try:

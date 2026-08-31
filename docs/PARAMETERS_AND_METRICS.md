@@ -105,7 +105,7 @@ $env:HARNESS_DB_PATH = "D:/wiki-papersearch/.harness/research-harness.sqlite3"
 | `OPENAI_BASE_URL` | A | 无 | 旧 OpenAI SDK-compatible endpoint 变量；与同时存在的 `OPENAI_API_BASE` 不一致时拒绝启动 |
 | `OPENAI_API_KEY` | A | 无 | OpenAI-compatible endpoint 的凭证；本地无鉴权服务也需非空 sentinel |
 | `DEEPXIV_TOKEN` | A | 无 | DeepXiv SDK 凭证；没有时论文发现 provider 不可用 |
-| `SEMANTIC_SCHOLAR_API_KEY` | A | 无 | 可选的 Semantic Scholar Academic Graph 凭证；配置后启用第二论文发现源 |
+| `SEMANTIC_SCHOLAR_API_KEY` | A | 无 | 可选的 Semantic Scholar 凭证；仅补充入选论文元数据，不参与第一轮批量发现 |
 | `S2_API_KEY` | F | 无 | `SEMANTIC_SCHOLAR_API_KEY` 的兼容别名；规范变量优先 |
 | `TAVILY_API_KEY` | A | 无 | Review Fast Loop 的 Web/官方项目页检索凭证；standard profile 必需 |
 | `GITHUB_TOKEN` | A | 无 | GitHub REST 凭证；可选，但 standard 正式运行建议配置以避免匿名限流 |
@@ -143,7 +143,7 @@ V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 
 | `max_promotions` | I | 0 | 6 |
 | paper / project / web soft quota | I | 5 / 1 / 2 | 30 / 10 / 10 |
 | `max_search_rounds` | I | 1 | 3 |
-| `max_queries` | I | 4 | 12 |
+| `max_queries` | I | 3 | 12 |
 | network / skim / deep-read concurrency | I | 4 / 2 / 2 | 4 / 2 / 2 |
 
 Review readiness 是计算结果，不可通过 YAML 直接填写：

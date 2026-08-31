@@ -144,7 +144,7 @@ class ReviewRunConfig(ReviewModel):
                 "project_source_quota": 1,
                 "web_source_quota": 2,
                 "max_search_rounds": 1,
-                "max_queries": 4,
+                "max_queries": 3,
             }
         else:
             budgets = {
@@ -196,7 +196,7 @@ class ReviewScope(ReviewModel):
 class RetrievalQuery(ReviewModel):
     id: str
     round: int = Field(ge=1)
-    provider: Literal["deepxiv", "semantic_scholar", "github", "tavily"]
+    provider: Literal["deepxiv", "github", "tavily"]
     text: str = Field(min_length=2, max_length=500)
     purpose: str = Field(min_length=2, max_length=800)
     target_facets: Tuple[str, ...] = ()

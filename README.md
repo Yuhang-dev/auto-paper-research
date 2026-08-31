@@ -42,9 +42,9 @@ Fast Research Loop
 
 标准漏斗是 `50 → 20 Skim → 10 Deep Read → 最多 6 篇晋升`，Smoke 是
 `8 → 4 → 2 → 0`。Fast Loop 不读取完整 Wiki 进模型上下文，也不写正式 Wiki。
-论文发现默认使用 DeepXiv；设置 `SEMANTIC_SCHOLAR_API_KEY` 后会同时启用
-Semantic Scholar Academic Graph，并在共享的论文配额内去重。使用说明见
-`docs/REVIEW_FIRST_HARNESS.md`。
+论文发现默认使用 DeepXiv；设置 `SEMANTIC_SCHOLAR_API_KEY` 后，只对进入 Deep
+Read 的少量论文补充 Semantic Scholar citation 和外部 ID，不执行 S2 大页批量发现。
+使用说明见 `docs/REVIEW_FIRST_HARNESS.md`。
 
 项目现在用 LangGraph 作为编排层。确定性的 Wiki parser、resolver、validator、
 query 与 DeepXiv 脚本仍是普通 Python 能力。系统分为 inner tool loop、Skill
@@ -222,8 +222,8 @@ D:\anaconda3\envs\paper-harness\python.exe -m pip install -r requirements-harnes
 
 当前锁定：LangChain 1.3.17、LangGraph 1.2.11、
 `langgraph-checkpoint-sqlite` 3.1.1、`langchain-openai` 1.6.0 和
-PyYAML 6.0.2、Pydantic 2.10.3、`deepxiv-sdk` 1.0.0、Tavily Python SDK
-和 pypdf 6.16.2。
+PyYAML 6.0.2、Pydantic 2.10.3、`deepxiv-sdk` 1.0.0、Tavily Python SDK、
+Requests 2.x 和 pypdf 6.16.2。
 
 ### Configure
 

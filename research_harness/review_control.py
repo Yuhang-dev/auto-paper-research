@@ -68,7 +68,6 @@ STAGE_RANK = {
 }
 PROVIDER_SOURCE_TYPE = {
     "deepxiv": "paper",
-    "semantic_scholar": "paper",
     "github": "project",
     "tavily": "web",
 }
@@ -689,33 +688,52 @@ def build_review_graph(
 
     async def _acquire_pending_materials(
         selected_sources: Sequence[SourceRecord],
-    ) -> tuple[dict[str, Any], list[tuple[SourceRecord, Exception]]]:
+    ) -> tuple[
+        dict[str, Any],
+        dict[str, SourceRecord],
+        list[tuple[SourceRecord, Exception]],
+        list[tuple[SourceRecord, Exception]],
+    ]:
         semaphore = asyncio.Semaphore(config.network_concurrency)
 
         async def one(source: SourceRecord):
-            material = store.material(source.source_id)
-            if material is not None:
-                return source, material, None
+            enriched = source
+            enrichment_error = None
             try:
                 async with semaphore:
-                    material = await providers.acquire_material(source)
-                return source, material, None
+                    enriched = await providers.enrich_source(source)
             except Exception as exc:
-                return source, None, exc
+                # S2 metadata is supplementary. A failure must never block the
+                # authoritative PDF acquisition or evidence path.
+                enrichment_error = exc
+            material = store.material(source.source_id)
+            if material is not None:
+                return source, enriched, material, None, enrichment_error
+            try:
+                async with semaphore:
+                    material = await providers.acquire_material(enriched)
+                return source, enriched, material, None, enrichment_error
+            except Exception as exc:
+                return source, enriched, None, exc, enrichment_error
 
         materials = {}
-        errors = []
+        enriched_sources = {}
+        acquisition_errors = []
+        enrichment_errors = []
         tasks = [asyncio.create_task(one(item)) for item in selected_sources]
         for task in asyncio.as_completed(tasks):
-            source, material, error = await task
-            if error is not None:
-                errors.append((source, error))
+            source, enriched, material, acquisition_error, enrichment_error = await task
+            enriched_sources[source.source_id] = enriched
+            if enrichment_error is not None:
+                enrichment_errors.append((source, enrichment_error))
+            if acquisition_error is not None:
+                acquisition_errors.append((source, acquisition_error))
             elif material is not None:
                 # Persist each completed material before waiting for the rest of
                 # the batch so Ctrl+C only leaves unfinished sources pending.
                 store.write_material(material)
                 materials[source.source_id] = material
-        return materials, errors
+        return materials, enriched_sources, acquisition_errors, enrichment_errors
 
     def deep_read(state: ReviewState) -> Dict[str, Any]:
         sources = {item.source_id: item for item in store.sources()}
@@ -727,9 +745,17 @@ def build_review_graph(
         )
         selected = tuple(ranked[:target_total])
         selected_sources = [sources[item] for item in selected if item in sources]
-        materials, acquisition_errors = _run_async(
+        materials, enriched_sources, acquisition_errors, enrichment_errors = _run_async(
             _acquire_pending_materials(selected_sources)
         )
+        for source, exc in enrichment_errors:
+            _record_error(
+                store,
+                stage="deep-read",
+                recurrence_key="review-provider:semantic-scholar-details",
+                observed=f"{type(exc).__name__}: {exc}",
+                source_id=source.source_id,
+            )
         for source, exc in acquisition_errors:
             _record_error(
                 store,
@@ -740,6 +766,7 @@ def build_review_graph(
             )
         updated_sources = []
         for source in sources.values():
+            source = enriched_sources.get(source.source_id, source)
             material = materials.get(source.source_id) or store.material(source.source_id)
             if material is None:
                 updated_sources.append(source)

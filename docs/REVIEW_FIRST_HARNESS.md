@@ -29,10 +29,11 @@ Skim 只用于筛选和导航，不能作为报告证据。
 | `smoke` | 8 | 4 | 2 | 0 |
 | `standard` | 50 | 20 | 10 | 最多 6 |
 
-标准来源软配额为论文 30、GitHub/项目 10、一般 Web 10。DeepXiv 与配置后的
-Semantic Scholar 共用论文配额，不会把总来源预算扩大到 50 以上。从第二轮开始，未填满的
-全局来源预算可以被仍有结果的 provider 重新利用；最终总来源始终受 `max_sources`
-约束。
+标准来源软配额为论文 30、GitHub/项目 10、一般 Web 10。论文发现由 DeepXiv
+承担；Semantic Scholar 不参与宽检索，也不增加来源数量。它只在漏斗已经选出
+Deep Read 论文后，按 arXiv ID 或 DOI 为这些少量论文补充 citation count、venue
+和外部 ID。从第二轮开始，未填满的全局来源预算可以被仍有结果的检索 provider
+重新利用；最终总来源始终受 `max_sources` 约束。
 
 ## 3. Fast Research Loop
 
@@ -82,8 +83,9 @@ EvidenceCard 等大对象保存在运行目录，不在每轮重复注入模型�
 统一 provider 在 `review_providers.py`：
 
 - DeepXiv：论文发现和元数据；
-- Semantic Scholar Academic Graph：可选的第二论文索引；按官方建议使用轻量
-  `paper/search/bulk` 补充发现、citation count 和跨 provider 身份核对；
+- Semantic Scholar Academic Graph：可选的入选论文元数据补全；只对 Deep Read
+  选中的论文调用单篇 Paper Details API，不执行 bulk discovery，不参与 Skim，
+  也不作为正式证据；
 - arXiv：受控 PDF 下载和选择性文本提取；
 - Tavily：官方项目页、静态 Web 和反证发现；
 - GitHub REST：仓库元数据、README、license、版本和活跃度。
@@ -112,7 +114,9 @@ $env:GITHUB_TOKEN = Read-Host -Prompt "GitHub token (optional)" -MaskInput
 `S2_API_KEY` 也可作为兼容别名，但项目文档统一使用
 `SEMANTIC_SCHOLAR_API_KEY`。Key 仅从当前进程环境读取，不写入 run config、
 artifact、SQLite 或 Git。Semantic Scholar 请求在 provider 内串行并遵守默认每秒一次
-的 key 配额；第一轮只取检索所需的少量字段，单次失败按 provider 隔离，不会终止整轮。
+的 key 配额；请求只发生在 Deep Read 选择之后，且一次只取一篇论文的有限元数据。
+补全失败只记录运行错误，不会阻断 PDF 获取、证据抽取或整轮调研。S2 返回的 citation
+count 等元数据仅用于导航和审计，不能替代带 locator 的 `EvidenceCard`。
 
 Fast 模型处理规划、screening 和 Skim；Reasoning 模型处理深读、EvidenceCard、
 反证判断和 synthesis。旧的 `HARNESS_MODEL / HARNESS_MODEL_BASE_URL /

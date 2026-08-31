@@ -94,7 +94,7 @@ DeepXiv 搜索结果只能形成 candidate coverage。只有被摄取到 Wiki、
 | 配置和过程记录 | PyYAML | Wiki frontmatter、schema、search-run、DoneCriteria |
 | 知识存储 | Markdown + YAML frontmatter | 人可读、Git 可审计的 Wiki 真源 |
 | 可重建索引 | JSON | entities、edges、aliases、backlinks、diagnostics、stats |
-| 学术检索 | DeepXiv SDK + Semantic Scholar Graph REST | 双论文索引发现、跨来源去重与发现 provenance |
+| 学术检索 | DeepXiv SDK + Semantic Scholar Graph REST | DeepXiv 发现；S2 仅对入选论文做轻量元数据补充 |
 | 模型适配 | `langchain-openai` | 当前 OpenAI Chat Model 适配器 |
 | CLI | Python `argparse` | doctor、run、research、skills、Wiki 等命令 |
 | 测试 | Python `unittest` | Harness、Wiki Engine、搜索脚本回归测试 |

@@ -50,7 +50,7 @@ from research_harness.review_promotion import ReviewPromoter
 from research_harness.review_providers import (
     ReviewProviderRegistry,
     SemanticScholarProvider,
-    _semantic_scholar_request,
+    _semantic_scholar_paper_details,
 )
 from research_harness.review_storage import ReviewArtifactStore
 
@@ -389,91 +389,139 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertEqual(2, len(repeated.sources))
         self.assertEqual(1, tavily.calls)
 
-    def test_semantic_scholar_provider_normalizes_paper_identity(self):
-        query = RetrievalQuery(
-            id="R01Q01",
-            round=1,
-            provider="semantic_scholar",
-            text="long-context sparse-attention",
-            purpose="Find independently indexed papers.",
-            target_facets=FACETS,
+    def test_semantic_scholar_enrichment_preserves_discovery_identity(self):
+        source = SourceRecord(
+            source_id="paper:arxiv:2401.00001",
+            source_type="paper",
+            provider="deepxiv",
+            title="Sparse Attention Fixture",
+            canonical_url="https://arxiv.org/abs/2401.00001",
+            arxiv_id="2401.00001",
+            pdf_url="https://arxiv.org/pdf/2401.00001",
+            discoveries=(
+                DiscoveryRecord(
+                    query_id="R01Q01",
+                    provider="deepxiv",
+                    rank=1,
+                    retrieved_at=NOW,
+                ),
+            ),
         )
         payload = {
-            "data": [
-                {
-                    "paperId": "s2-fixture-paper",
-                    "corpusId": 123,
-                    "title": "Sparse Attention Fixture",
-                    "abstract": "A fixture abstract.",
-                    "year": 2024,
-                    "authors": [{"authorId": "1", "name": "Ada Example"}],
-                    "url": "https://www.semanticscholar.org/paper/s2-fixture-paper",
-                    "venue": "FixtureConf",
-                    "externalIds": {
-                        "ArXiv": "2401.00001v2",
-                        "DOI": "10.0000/FIXTURE",
-                    },
-                    "openAccessPdf": {
-                        "url": "https://arxiv.org/pdf/2401.00001"
-                    },
-                    "citationCount": 7,
-                    "publicationDate": "2024-01-02",
-                }
-            ]
+            "paperId": "s2-fixture-paper",
+            "corpusId": 123,
+            "title": "Sparse Attention Fixture",
+            "abstract": "A fixture abstract.",
+            "year": 2024,
+            "authors": [{"authorId": "1", "name": "Ada Example"}],
+            "url": "https://www.semanticscholar.org/paper/s2-fixture-paper",
+            "venue": "FixtureConf",
+            "externalIds": {
+                "ArXiv": "2401.00001v2",
+                "DOI": "10.0000/FIXTURE",
+            },
+            "openAccessPdf": {"url": "https://arxiv.org/pdf/2401.00001"},
+            "citationCount": 7,
+            "influentialCitationCount": 2,
+            "publicationDate": "2024-01-02",
         }
         with mock.patch(
-            "research_harness.review_providers._semantic_scholar_request",
+            "research_harness.review_providers._semantic_scholar_paper_details",
             return_value=payload,
         ) as request:
-            sources = asyncio.run(
-                SemanticScholarProvider("fixture-s2-key").search(query, limit=2)
+            enriched = asyncio.run(
+                SemanticScholarProvider("fixture-s2-key").enrich(source)
             )
         request.assert_called_once_with(
-            query.text,
+            "ARXIV:2401.00001",
             "fixture-s2-key",
-            limit=2,
         )
-        self.assertEqual(1, len(sources))
-        source = sources[0]
-        self.assertEqual("paper:arxiv:2401.00001", source.source_id)
-        self.assertEqual("semantic_scholar", source.provider)
-        self.assertEqual("2401.00001", source.arxiv_id)
-        self.assertEqual("10.0000/fixture", source.doi)
-        self.assertEqual("Ada Example", source.authors[0])
-        self.assertEqual("s2-fixture-paper", source.metadata["semantic_scholar_paper_id"])
+        self.assertEqual(source.source_id, enriched.source_id)
+        self.assertEqual("deepxiv", enriched.provider)
+        self.assertEqual("10.0000/fixture", enriched.doi)
+        self.assertEqual("Ada Example", enriched.authors[0])
+        self.assertEqual(7, enriched.metadata["citation_count"])
+        self.assertEqual(2, enriched.metadata["influential_citation_count"])
 
-    def test_semantic_scholar_discovery_uses_bounded_bulk_search(self):
-        payload = json.dumps({"total": 0, "data": []}).encode("utf-8")
+    def test_semantic_scholar_enrichment_uses_one_bounded_detail_request(self):
+        payload = json.dumps(
+            {"paperId": "s2-fixture", "title": "Fixture"}
+        ).encode("utf-8")
 
         class Response:
+            status_code = 200
+
             def __enter__(self):
                 return self
 
             def __exit__(self, *_args):
                 return False
 
-            def read(self, _limit):
-                return payload
+            def iter_content(self, *, chunk_size):
+                self.chunk_size = chunk_size
+                yield payload
 
         with mock.patch(
-            "research_harness.review_providers.urllib.request.urlopen",
+            "research_harness.review_providers.requests.get",
             return_value=Response(),
-        ) as opened:
-            result = _semantic_scholar_request(
-                "long-context sparse-attention",
+        ) as requested:
+            result = _semantic_scholar_paper_details(
+                "ARXIV:2401.00001",
                 "fixture-s2-key",
-                limit=2,
             )
-        self.assertEqual([], result["data"])
-        request = opened.call_args.args[0]
-        parsed = urllib.parse.urlsplit(request.full_url)
-        parameters = urllib.parse.parse_qs(parsed.query)
-        headers = {name.casefold(): value for name, value in request.header_items()}
-        self.assertEqual("/graph/v1/paper/search/bulk", parsed.path)
-        self.assertEqual(["2"], parameters["limit"])
-        self.assertEqual(["citationCount:desc"], parameters["sort"])
-        self.assertNotIn("authors", parameters["fields"][0])
-        self.assertEqual("fixture-s2-key", headers["x-api-key"])
+        self.assertEqual("s2-fixture", result["paperId"])
+        url = requested.call_args.args[0]
+        request_options = requested.call_args.kwargs
+        parsed = urllib.parse.urlsplit(url)
+        self.assertEqual("/graph/v1/paper/ARXIV:2401.00001", parsed.path)
+        self.assertIn("authors", request_options["params"]["fields"])
+        self.assertNotIn("query", request_options["params"])
+        self.assertEqual(
+            "fixture-s2-key",
+            request_options["headers"]["x-api-key"],
+        )
+        self.assertTrue(request_options["stream"])
+
+    def test_semantic_scholar_http_error_retains_safe_service_message(self):
+        payload = b'{"message":"Too Many Requests","code":"429"}'
+
+        class Response:
+            status_code = 429
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def iter_content(self, *, chunk_size):
+                del chunk_size
+                yield payload
+
+        with mock.patch(
+            "research_harness.review_providers.requests.get",
+            return_value=Response(),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Semantic Scholar HTTP 429.*Too Many Requests",
+            ):
+                _semantic_scholar_paper_details(
+                    "ARXIV:2401.00001",
+                    "fixture-s2-key",
+                )
+
+    def test_semantic_scholar_is_not_a_retrieval_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            registry = ReviewProviderRegistry(
+                root,
+                root / "working",
+                providers={"tavily": FakeTavilyProvider()},
+                semantic_scholar=SemanticScholarProvider("fixture-s2-key"),
+            )
+
+        self.assertEqual(("tavily",), registry.names)
 
     def test_evidence_and_synthesis_contracts_reject_untraceable_claims(self):
         with self.assertRaisesRegex(ValueError, "experimental conditions"):

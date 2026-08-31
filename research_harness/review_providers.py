@@ -22,6 +22,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Mapping, Optional, Protocol, Sequence
 
+import requests
+
 from .paper_ingest import extract_pdf_document, select_paper_excerpt
 from .paper_sources import ArxivPaperSourceAcquirer
 from .review_logic import (
@@ -231,55 +233,65 @@ class DeepXivProvider:
         return await asyncio.to_thread(self._search_sync, query, limit)
 
 
-def _semantic_scholar_request(
-    query: str,
-    api_key: str,
-    *,
-    limit: int,
-) -> Mapping[str, Any]:
-    """Execute one bounded Semantic Scholar Academic Graph search."""
+def _semantic_scholar_identifier(source: SourceRecord) -> Optional[str]:
+    if source.arxiv_id:
+        return f"ARXIV:{canonical_arxiv_id(source.arxiv_id)}"
+    if source.doi:
+        return f"DOI:{canonical_doi(source.doi)}"
+    paper_id = str(source.metadata.get("semantic_scholar_paper_id") or "").strip()
+    return paper_id or None
 
-    # Bulk search is the official recommendation for corpus discovery. Keep
-    # this first pass intentionally small; author/venue details are available
-    # from the retained paper or later evidence acquisition when needed.
+
+def _semantic_scholar_paper_details(
+    identifier: str,
+    api_key: str,
+) -> Mapping[str, Any]:
+    """Fetch one bounded paper-detail record after funnel selection."""
+
     fields = (
-        "paperId,title,abstract,year,url,externalIds,openAccessPdf,"
-        "citationCount,publicationDate"
-    )
-    encoded = urllib.parse.urlencode(
-        {
-            # The Academic Graph relevance endpoint does not support special
-            # syntax, and its documentation recommends replacing hyphens.
-            "query": re.sub(r"[-\u2010-\u2015]+", " ", query),
-            "limit": min(max(1, limit), 100),
-            "fields": fields,
-            "sort": "citationCount:desc",
-        }
+        "paperId,corpusId,title,abstract,year,authors,url,venue,externalIds,"
+        "openAccessPdf,citationCount,influentialCitationCount,publicationDate"
     )
     headers = {
         "Accept": "application/json",
         "User-Agent": "auto-paper-research-review-harness/0.1",
+        "x-api-key": api_key,
     }
-    if api_key:
-        headers["x-api-key"] = api_key
-    request = urllib.request.Request(
-        f"https://api.semanticscholar.org/graph/v1/paper/search/bulk?{encoded}",
-        headers=headers,
+    encoded_identifier = urllib.parse.quote(identifier, safe=":")
+    url = (
+        "https://api.semanticscholar.org/graph/v1/paper/"
+        f"{encoded_identifier}"
     )
-    with urllib.request.urlopen(request, timeout=45) as response:
-        data = response.read(MAX_WEB_BYTES + 1)
-        if len(data) > MAX_WEB_BYTES:
-            raise ValueError(
-                "Semantic Scholar response exceeded the configured byte limit"
+    # Follow the official tutorial's requests-based example. In particular,
+    # keep the documented lower-case x-api-key header instead of letting
+    # urllib.request canonicalize its spelling.
+    with requests.get(
+        url,
+        params={"fields": fields},
+        headers=headers,
+        timeout=45,
+        stream=True,
+    ) as response:
+        data = bytearray()
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            data.extend(chunk)
+            if len(data) > MAX_WEB_BYTES:
+                raise ValueError(
+                    "Semantic Scholar response exceeded the configured byte limit"
+                )
+        if response.status_code >= 400:
+            detail = bytes(data).decode("utf-8", errors="replace")[:800]
+            raise RuntimeError(
+                f"Semantic Scholar HTTP {response.status_code}: {detail}"
             )
-    payload = json.loads(data.decode("utf-8", errors="replace"))
+    payload = json.loads(bytes(data).decode("utf-8", errors="replace"))
     if not isinstance(payload, Mapping):
         raise ValueError("Semantic Scholar returned a non-mapping response")
     return payload
 
 
 class SemanticScholarProvider:
-    """Paper discovery through the official Semantic Scholar Graph API."""
+    """Best-effort metadata enrichment for papers selected for deep reading."""
 
     name = "semantic_scholar"
 
@@ -290,105 +302,66 @@ class SemanticScholarProvider:
         self._request_lock = threading.Lock()
         self._last_request_started = 0.0
 
-    def _request(self, query: str, limit: int) -> Mapping[str, Any]:
+    def _request(self, identifier: str) -> Mapping[str, Any]:
         with self._request_lock:
             wait_seconds = 1.0 - (time.monotonic() - self._last_request_started)
             if wait_seconds > 0:
                 time.sleep(wait_seconds)
             self._last_request_started = time.monotonic()
-            return _semantic_scholar_request(
-                query,
+            return _semantic_scholar_paper_details(
+                identifier,
                 self.api_key,
-                limit=limit,
             )
 
-    async def search(
-        self, query: RetrievalQuery, *, limit: int
-    ) -> tuple[SourceRecord, ...]:
-        bounded_limit = min(max(1, limit), 100)
-        # Introductory S2 API keys are documented at one request per second.
-        # Serialize this provider even though other network providers remain
-        # concurrent, so a multi-query batch does not burst past that limit.
-        payload = await asyncio.to_thread(self._request, query.text, bounded_limit)
-        rows = payload.get("data") or []
-        if not isinstance(rows, list):
-            raise ValueError("Semantic Scholar search data must be a list")
-        retrieved_at = _utc_now()
-        result = []
-        for rank, row in enumerate(rows[:bounded_limit], start=1):
-            if not isinstance(row, Mapping):
-                continue
-            paper_id = str(row.get("paperId") or "").strip()
-            title = str(row.get("title") or "").strip()
-            if not paper_id or not title:
-                continue
-            external_ids = row.get("externalIds") or {}
-            if not isinstance(external_ids, Mapping):
-                external_ids = {}
-            raw_arxiv = external_ids.get("ArXiv") or external_ids.get("arXiv")
-            raw_doi = external_ids.get("DOI") or external_ids.get("doi")
-            arxiv_id = canonical_arxiv_id(str(raw_arxiv)) if raw_arxiv else None
-            doi = canonical_doi(str(raw_doi)) if raw_doi else None
-            open_access = row.get("openAccessPdf") or {}
-            if not isinstance(open_access, Mapping):
-                open_access = {}
-            open_pdf_url = str(open_access.get("url") or "").strip() or None
-            semantic_url = str(row.get("url") or "").strip()
-            if arxiv_id:
-                canonical_source_url = f"https://arxiv.org/abs/{arxiv_id}"
-                pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
-                source_id = f"paper:arxiv:{arxiv_id}"
-            elif doi:
-                canonical_source_url = f"https://doi.org/{doi}"
-                pdf_url = open_pdf_url
-                source_id = stable_id("paper-doi", doi)
-            else:
-                canonical_source_url = (
-                    semantic_url
-                    or f"https://www.semanticscholar.org/paper/{paper_id}"
-                )
-                pdf_url = open_pdf_url
-                source_id = f"paper:semantic-scholar:{paper_id}"
-            publication_date = str(row.get("publicationDate") or "").strip()
-            result.append(
-                SourceRecord(
-                    source_id=source_id,
-                    source_type="paper",
-                    provider="semantic_scholar",
-                    title=title,
-                    canonical_url=canonical_url(canonical_source_url),
-                    authors=_authors(row.get("authors")),
-                    year=_year(row.get("year") or publication_date),
-                    venue=(str(row.get("venue") or "").strip() or None),
-                    abstract=(str(row.get("abstract") or "").strip() or None),
-                    doi=doi,
-                    arxiv_id=arxiv_id,
-                    pdf_url=pdf_url,
-                    version=(
-                        publication_date
-                        or f"semantic-scholar-retrieved:{retrieved_at}"
-                    ),
-                    target_facets=query.target_facets,
-                    discoveries=(
-                        DiscoveryRecord(
-                            query_id=query.id,
-                            provider="semantic_scholar",
-                            rank=rank,
-                            retrieved_at=retrieved_at,
-                            provider_score=None,
-                        ),
-                    ),
-                    metadata={
-                        "semantic_scholar_paper_id": paper_id,
-                        "semantic_scholar_corpus_id": row.get("corpusId"),
-                        "semantic_scholar_search_mode": "bulk",
-                        "citation_count": row.get("citationCount"),
-                        "external_ids": dict(external_ids),
-                        "open_access_pdf": open_pdf_url,
-                    },
-                )
-            )
-        return tuple(result)
+    async def enrich(self, source: SourceRecord) -> SourceRecord:
+        if source.source_type != "paper":
+            return source
+        if source.metadata.get("semantic_scholar_enriched_at"):
+            return source
+        identifier = _semantic_scholar_identifier(source)
+        if not identifier:
+            return source
+        # Details are fetched only after deterministic deep-read selection,
+        # never during broad discovery or skim.
+        payload = await asyncio.to_thread(self._request, identifier)
+        paper_id = str(payload.get("paperId") or "").strip()
+        if not paper_id:
+            raise ValueError("Semantic Scholar paper detail omitted paperId")
+        external_ids = payload.get("externalIds") or {}
+        if not isinstance(external_ids, Mapping):
+            external_ids = {}
+        raw_arxiv = external_ids.get("ArXiv") or external_ids.get("arXiv")
+        raw_doi = external_ids.get("DOI") or external_ids.get("doi")
+        open_access = payload.get("openAccessPdf") or {}
+        if not isinstance(open_access, Mapping):
+            open_access = {}
+        open_pdf_url = str(open_access.get("url") or "").strip() or None
+        publication_date = str(payload.get("publicationDate") or "").strip()
+        metadata = {
+            **source.metadata,
+            "semantic_scholar_paper_id": paper_id,
+            "semantic_scholar_corpus_id": payload.get("corpusId"),
+            "semantic_scholar_url": payload.get("url"),
+            "semantic_scholar_enriched_at": _utc_now(),
+            "citation_count": payload.get("citationCount"),
+            "influential_citation_count": payload.get("influentialCitationCount"),
+            "external_ids": dict(external_ids),
+            "open_access_pdf": open_pdf_url,
+        }
+        return source.model_copy(
+            update={
+                "authors": source.authors or _authors(payload.get("authors")),
+                "year": source.year or _year(payload.get("year") or publication_date),
+                "venue": source.venue or (str(payload.get("venue") or "").strip() or None),
+                "abstract": source.abstract or (str(payload.get("abstract") or "").strip() or None),
+                "doi": source.doi or (canonical_doi(str(raw_doi)) if raw_doi else None),
+                "arxiv_id": source.arxiv_id or (
+                    canonical_arxiv_id(str(raw_arxiv)) if raw_arxiv else None
+                ),
+                "pdf_url": source.pdf_url or open_pdf_url,
+                "metadata": metadata,
+            }
+        )
 
 
 class TavilyProvider:
@@ -757,6 +730,7 @@ class ReviewProviderRegistry:
         working_root: Path,
         *,
         providers: Optional[Mapping[str, RetrievalProvider]] = None,
+        semantic_scholar: Optional[SemanticScholarProvider] = None,
         network_concurrency: int = 4,
     ):
         self.repository_root = repository_root.resolve()
@@ -767,22 +741,22 @@ class ReviewProviderRegistry:
                 "github": GitHubProvider(os.getenv("GITHUB_TOKEN", "")),
             }
             deepxiv = os.getenv("DEEPXIV_TOKEN", "").strip()
-            semantic_scholar = (
+            semantic_key = (
                 os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
                 or os.getenv("S2_API_KEY", "").strip()
             )
             tavily = os.getenv("TAVILY_API_KEY", "").strip()
             if deepxiv:
                 configured["deepxiv"] = DeepXivProvider(deepxiv)
-            if semantic_scholar:
-                configured["semantic_scholar"] = SemanticScholarProvider(
-                    semantic_scholar
-                )
             if tavily:
                 configured["tavily"] = TavilyProvider(tavily)
             self.providers = configured
+            self.semantic_scholar = semantic_scholar or (
+                SemanticScholarProvider(semantic_key) if semantic_key else None
+            )
         else:
             self.providers = dict(providers)
+            self.semantic_scholar = semantic_scholar
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -880,6 +854,13 @@ class ReviewProviderRegistry:
             sources=tuple(sorted(sources, key=lambda item: item.source_id)),
             errors=tuple(errors),
         )
+
+    async def enrich_source(self, source: SourceRecord) -> SourceRecord:
+        """Best-effort caller hook used only after deep-read selection."""
+
+        if self.semantic_scholar is None or source.source_type != "paper":
+            return source
+        return await self.semantic_scholar.enrich(source)
 
     async def acquire_material(self, source: SourceRecord) -> SourceMaterial:
         acquired_at = _utc_now()

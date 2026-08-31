@@ -217,7 +217,6 @@ class LangChainReviewSemanticEngine:
             base_query = scope.seed_queries[0] if scope.seed_queries else scope.question
             suffixes = {
                 "deepxiv": "research paper",
-                "semantic_scholar": "independent citation index paper",
                 "github": "GitHub repository implementation",
                 "tavily": "official documentation counter evidence",
             }
