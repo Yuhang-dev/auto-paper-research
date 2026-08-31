@@ -77,7 +77,17 @@ def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
 def _redact(value: Any) -> Any:
     secrets = tuple(
         secret
-        for name in ("DEEPXIV_TOKEN", "OPENAI_API_KEY", "DEEPSEEK_API_KEY")
+        for name in (
+            "DEEPXIV_TOKEN",
+            "SEMANTIC_SCHOLAR_API_KEY",
+            "S2_API_KEY",
+            "TAVILY_API_KEY",
+            "GITHUB_TOKEN",
+            "OPENAI_API_KEY",
+            "HARNESS_FAST_API_KEY",
+            "HARNESS_REASONING_API_KEY",
+            "DEEPSEEK_API_KEY",
+        )
         if (secret := os.getenv(name, ""))
     )
     if isinstance(value, BaseModel):

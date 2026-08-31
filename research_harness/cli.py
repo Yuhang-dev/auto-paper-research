@@ -197,6 +197,111 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     _add_format(research_resume)
 
+    research_review = research_commands.add_parser(
+        "review",
+        help="Run the review-first fast research loop without writing the Wiki.",
+    )
+    review_commands = research_review.add_subparsers(
+        dest="review_command",
+        required=True,
+    )
+
+    review_start = review_commands.add_parser(
+        "start", help="Start a persisted scientific-review run."
+    )
+    review_start.add_argument("research_id")
+    review_start.add_argument("--thread", required=True)
+    review_start.add_argument("--run-id")
+    review_start.add_argument(
+        "--profile", choices=("smoke", "standard"), default="standard"
+    )
+    review_start.add_argument("--allow-network", action="store_true")
+    review_start.add_argument(
+        "--allow-single-model-fallback",
+        action="store_true",
+        help="Explicitly allow the fast model to perform reasoning tasks too.",
+    )
+    review_start.add_argument(
+        "--stop-after",
+        choices=(
+            "frame",
+            "retrieval",
+            "screening",
+            "skim",
+            "reasoning",
+            "deep-read",
+            "assessment",
+            "synthesis",
+        ),
+        default="synthesis",
+    )
+    _add_format(review_start)
+
+    review_resume = review_commands.add_parser(
+        "resume", help="Resume a review after re-inspecting run artifacts by default."
+    )
+    review_resume.add_argument("research_id")
+    review_resume.add_argument("--thread", required=True)
+    review_resume.add_argument(
+        "--mode", choices=("checkpoint", "replan"), default="replan"
+    )
+    _add_format(review_resume)
+
+    review_status = review_commands.add_parser(
+        "status", help="Inspect a review checkpoint and its artifact funnel."
+    )
+    review_status.add_argument("research_id")
+    review_status.add_argument("--thread", required=True)
+    _add_format(review_status)
+
+    review_synthesize = review_commands.add_parser(
+        "synthesize", help="Regenerate the review from the current Evidence Pool."
+    )
+    review_synthesize.add_argument("research_id")
+    review_synthesize.add_argument("--thread", required=True)
+    _add_format(review_synthesize)
+
+    review_canary = review_commands.add_parser(
+        "canary", help="Run the isolated 8 → 4 → 2 review smoke profile."
+    )
+    review_canary.add_argument("research_id")
+    review_canary.add_argument("--thread")
+    review_canary.add_argument("--run-id")
+    review_canary.add_argument("--allow-network", action="store_true")
+    review_canary.add_argument(
+        "--allow-single-model-fallback", action="store_true"
+    )
+    review_canary.add_argument(
+        "--stop-after",
+        choices=(
+            "frame",
+            "retrieval",
+            "screening",
+            "skim",
+            "reasoning",
+            "deep-read",
+            "assessment",
+            "synthesis",
+        ),
+        default="synthesis",
+    )
+    _add_format(review_canary)
+
+    review_promote = review_commands.add_parser(
+        "promote",
+        help="Preview or execute explicit handoff into deferred PaperIngestDraft.",
+    )
+    review_promote.add_argument("research_id")
+    review_promote.add_argument("--thread", required=True)
+    review_promote.add_argument("--manifest", type=Path)
+    review_promote.add_argument("--execute", action="store_true")
+    review_promote.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="Authorize model/API calls during an executed promotion.",
+    )
+    _add_format(review_promote)
+
     research_canary = research_commands.add_parser(
         "canary",
         help="Run a hard-bounded online flow in an isolated workspace.",
@@ -248,7 +353,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     research_publish_staged.add_argument(
         "--run-id",
         required=True,
-        help="Canary run that owns the staged draft queue.",
+        help="Canary or review run that owns the staged draft queue.",
     )
     research_publish_staged.add_argument(
         "--target",
@@ -362,6 +467,7 @@ def _doctor(settings: HarnessSettings, output_format: str) -> int:
         "langgraph-checkpoint-sqlite",
         "langchain-openai",
         "deepxiv-sdk",
+        "tavily-python",
         "pydantic",
     ):
         try:
@@ -388,6 +494,32 @@ def _doctor(settings: HarnessSettings, output_format: str) -> int:
             settings.model and settings.model_base_url and openai_key_configured
         ),
         "deepxiv_token_configured": bool(os.getenv("DEEPXIV_TOKEN")),
+        "semantic_scholar_key_configured": bool(
+            os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
+            or os.getenv("S2_API_KEY", "").strip()
+        ),
+        "tavily_key_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
+        "github_token_configured": bool(os.getenv("GITHUB_TOKEN", "").strip()),
+        "review_models": {
+            "fast_model": os.getenv("HARNESS_FAST_MODEL", "").strip()
+            or settings.model,
+            "fast_base_url_configured": bool(
+                os.getenv("HARNESS_FAST_MODEL_BASE_URL", "").strip()
+                or settings.model_base_url
+            ),
+            "fast_key_configured": bool(
+                os.getenv("HARNESS_FAST_API_KEY", "").strip()
+                or os.getenv("OPENAI_API_KEY", "").strip()
+            ),
+            "reasoning_model": os.getenv("HARNESS_REASONING_MODEL", "").strip()
+            or None,
+            "reasoning_base_url_configured": bool(
+                os.getenv("HARNESS_REASONING_MODEL_BASE_URL", "").strip()
+            ),
+            "reasoning_key_configured": bool(
+                os.getenv("HARNESS_REASONING_API_KEY", "").strip()
+            ),
+        },
         "strict_msgpack": os.getenv("LANGGRAPH_STRICT_MSGPACK") == "true",
         "skills": {"count": len(registry), "names": list(registry.names)},
         "research_controls": {
@@ -669,7 +801,17 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
 
 def _redact_secret_values(value: str) -> str:
     result = value
-    for name in ("DEEPXIV_TOKEN", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
+    for name in (
+        "DEEPXIV_TOKEN",
+        "SEMANTIC_SCHOLAR_API_KEY",
+        "S2_API_KEY",
+        "TAVILY_API_KEY",
+        "GITHUB_TOKEN",
+        "OPENAI_API_KEY",
+        "HARNESS_FAST_API_KEY",
+        "HARNESS_REASONING_API_KEY",
+        "DEEPSEEK_API_KEY",
+    ):
         secret = os.getenv(name, "")
         if secret:
             result = result.replace(secret, "[REDACTED]")
@@ -915,30 +1057,48 @@ def _run_publish_staged(
     if args.max_papers < 1 or args.max_papers > 100:
         raise ValueError("--max-papers must be between 1 and 100")
     canary_root = settings.repository_root / ".harness" / "canary" / args.run_id
-    if not canary_root.is_dir():
-        raise FileNotFoundError(f"Canary run not found: {canary_root}")
+    review_root = settings.repository_root / ".harness" / "review-runs" / args.run_id
+    if canary_root.is_dir():
+        run_root = canary_root
+        run_kind = "canary"
+    elif review_root.is_dir():
+        run_root = review_root
+        run_kind = "review"
+    else:
+        raise FileNotFoundError(
+            f"No Canary or review staging run found for {args.run_id!r}"
+        )
+    if run_kind == "review" and args.target != "formal":
+        raise ValueError(
+            "Review promotions can only be published with --target formal; "
+            "the review run already provides the isolation boundary"
+        )
     store = StagedPaperStore(
         settings.repository_root,
-        canary_root / "artifacts" / "staged",
+        run_root / "artifacts" / "staged",
     )
     target_id = (
         f"canary:{args.run_id}"
         if args.target == "canary"
         else f"formal:{args.research_id}"
     )
-    target_settings = _canary_publish_settings(
-        settings,
-        canary_root,
-        target=args.target,
+    target_settings = (
+        settings
+        if run_kind == "review"
+        else _canary_publish_settings(
+            settings,
+            run_root,
+            target=args.target,
+        )
     )
     recorder = None
-    manifest = canary_root / "artifacts" / "semantic-manifest.json"
+    manifest = run_root / "artifacts" / "semantic-manifest.json"
     if manifest.is_file():
         from .artifacts import SemanticArtifactRecorder
 
         recorder = SemanticArtifactRecorder(
             settings.repository_root,
-            canary_root / "artifacts",
+            run_root / "artifacts",
         )
     publisher = StagedWikiPublisher(
         target_settings,
@@ -978,6 +1138,7 @@ def _run_publish_staged(
         {
             "research_id": args.research_id,
             "run_id": args.run_id,
+            "run_kind": run_kind,
             "target": args.target,
             "target_id": target_id,
             "preview": bool(args.preview),
@@ -990,7 +1151,238 @@ def _run_publish_staged(
     return 0
 
 
+def _review_run_id(prefix: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"{prefix}-{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _review_checkpoint_context(
+    settings: HarnessSettings,
+    *,
+    research_id: str,
+    thread_id: str,
+):
+    from .review_control import read_review_checkpoint
+    from .review_storage import ReviewArtifactStore
+
+    state = read_review_checkpoint(
+        settings,
+        research_id=research_id,
+        thread_id=thread_id,
+    )
+    run_id = str(state.get("run_id") or "").strip()
+    if not run_id:
+        raise ValueError("Review checkpoint does not contain a run_id")
+    config = ReviewArtifactStore.load_config(settings, run_id)
+    if config.research_id != research_id:
+        raise ValueError("Review checkpoint research_id does not match run config")
+    if config.thread_id != thread_id:
+        raise ValueError("Review checkpoint thread does not match run config")
+    return state, config, ReviewArtifactStore(settings, config)
+
+
+def _review_state_payload(
+    state: Mapping[str, Any],
+    store: Any,
+) -> Dict[str, Any]:
+    readiness = store.readiness()
+    paths = {
+        "review": store.relative(store.report_path) if store.report_path.is_file() else None,
+        "sources": store.relative(store.sources_path) if store.sources_path.is_file() else None,
+        "skims": store.relative(store.skims_path) if store.skims_path.is_file() else None,
+        "evidence_cards": (
+            store.relative(store.cards_path) if store.cards_path.is_file() else None
+        ),
+        "trajectory": (
+            store.relative(store.trajectory_path)
+            if store.trajectory_path.is_file()
+            else None
+        ),
+        "promotion_manifest": (
+            store.relative(store.promotion_path)
+            if store.promotion_path.is_file()
+            else None
+        ),
+    }
+    report_exists = store.report_path.is_file()
+    return {
+        "schema_version": "review-status-0.1",
+        "research_id": store.config.research_id,
+        "run_id": store.config.run_id,
+        "thread_id": store.config.thread_id,
+        "profile": store.config.profile,
+        "models": {
+            "fast": store.config.fast_model,
+            "fast_base_url": store.config.fast_model_base_url,
+            "reasoning": store.config.reasoning_model,
+            "reasoning_base_url": store.config.reasoning_model_base_url,
+            "fingerprint": store.config.model_fingerprint,
+            "single_model_fallback_used": store.config.single_model_fallback_used,
+        },
+        "phase": "completed" if report_exists else state.get("phase", "not-started"),
+        "completed": bool(state.get("completed") or report_exists),
+        "stop_reason": state.get("stop_reason", ""),
+        "round_number": int(state.get("round_number") or 0),
+        "funnel": {
+            "sources": len(store.sources()),
+            "skims": len(store.skims()),
+            "deep_reads": len(store.deep_read_completed()),
+            "evidence_cards": len(store.cards()),
+            "promotion_limit": store.config.max_promotions,
+        },
+        "readiness": readiness.model_dump(mode="json") if readiness else None,
+        "run_local_errors": len(store.error_events()),
+        "paths": paths,
+        "fast_loop_wiki_written": False,
+    }
+
+
+def _run_review_start(
+    settings: HarnessSettings,
+    args: argparse.Namespace,
+    *,
+    canary: bool,
+) -> int:
+    from .review_control import ReviewController
+    from .model_client import ReviewModelBundle
+    from .review_models import ReviewRunConfig
+    from .review_semantics import LangChainReviewSemanticEngine
+    from .review_storage import ReviewArtifactStore, load_review_scope
+
+    if not args.allow_network:
+        raise ValueError("research review start/canary requires --allow-network")
+    scope = load_review_scope(settings, args.research_id)
+    bundle = ReviewModelBundle.from_env(
+        settings,
+        allow_single_model_fallback=bool(args.allow_single_model_fallback),
+        require_reasoning=not canary and args.profile == "standard",
+    )
+    run_id = args.run_id or _review_run_id("review-smoke" if canary else "review")
+    thread_id = args.thread or f"review:{args.research_id}:{run_id}"
+    args.thread = thread_id
+    profile = "smoke" if canary else args.profile
+    config = ReviewRunConfig.for_profile(
+        research_id=args.research_id,
+        run_id=run_id,
+        thread_id=thread_id,
+        profile=profile,
+        question=scope.question,
+        title=scope.title,
+        required_facets=scope.required_facets,
+        candidate_hypotheses=scope.candidate_hypotheses,
+        allow_network=True,
+        allow_single_model_fallback=bool(args.allow_single_model_fallback),
+        canary=canary,
+        stop_after=args.stop_after,
+        created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        fast_model=bundle.fast.model,
+        fast_model_base_url=bundle.fast.base_url,
+        reasoning_model=bundle.reasoning.model,
+        reasoning_model_base_url=bundle.reasoning.base_url,
+        model_fingerprint=bundle.fingerprint,
+        single_model_fallback_used=bundle.single_model_fallback,
+    )
+    semantic_engine = LangChainReviewSemanticEngine(bundle, settings.skills_root)
+    with ReviewController(
+        settings,
+        config=config,
+        scope=scope,
+        semantic_engine=semantic_engine,
+    ) as controller:
+        state = controller.start()
+    store = ReviewArtifactStore(settings, config)
+    _emit_payload(_review_state_payload(state, store), args.format)
+    return 0
+
+
+def _run_review_resume(settings: HarnessSettings, args: argparse.Namespace) -> int:
+    from .review_control import ReviewController
+
+    _state, config, store = _review_checkpoint_context(
+        settings,
+        research_id=args.research_id,
+        thread_id=args.thread,
+    )
+    with ReviewController(settings, config=config) as controller:
+        state = controller.resume(mode=args.mode)
+    _emit_payload(_review_state_payload(state, store), args.format)
+    return 0
+
+
+def _run_review_status(settings: HarnessSettings, args: argparse.Namespace) -> int:
+    state, _config, store = _review_checkpoint_context(
+        settings,
+        research_id=args.research_id,
+        thread_id=args.thread,
+    )
+    _emit_payload(_review_state_payload(state, store), args.format)
+    return 0
+
+
+def _run_review_synthesize(settings: HarnessSettings, args: argparse.Namespace) -> int:
+    from .review_control import ReviewController
+    from .review_providers import ReviewProviderRegistry
+
+    _state, config, store = _review_checkpoint_context(
+        settings,
+        research_id=args.research_id,
+        thread_id=args.thread,
+    )
+    providers = ReviewProviderRegistry(
+        settings.repository_root,
+        store.working_root,
+        network_concurrency=config.network_concurrency,
+    )
+    with ReviewController(
+        settings,
+        config=config,
+        providers=providers,
+    ) as controller:
+        state = controller.synthesize_now()
+    _emit_payload(_review_state_payload(state, store), args.format)
+    return 0
+
+
+def _run_review_promote(settings: HarnessSettings, args: argparse.Namespace) -> int:
+    from .review_promotion import ReviewPromoter
+
+    _state, config, store = _review_checkpoint_context(
+        settings,
+        research_id=args.research_id,
+        thread_id=args.thread,
+    )
+    promoter = ReviewPromoter(settings, store)
+    if args.execute:
+        payload = promoter.execute(
+            manifest_path=args.manifest,
+            allow_network=bool(args.allow_network or config.allow_network),
+        )
+    else:
+        payload = promoter.preview(args.manifest)
+    _emit_payload(payload, args.format)
+    return 0
+
+
+def _run_review(settings: HarnessSettings, args: argparse.Namespace) -> int:
+    if args.review_command == "start":
+        return _run_review_start(settings, args, canary=False)
+    if args.review_command == "canary":
+        return _run_review_start(settings, args, canary=True)
+    if args.review_command == "resume":
+        return _run_review_resume(settings, args)
+    if args.review_command == "status":
+        return _run_review_status(settings, args)
+    if args.review_command == "synthesize":
+        return _run_review_synthesize(settings, args)
+    if args.review_command == "promote":
+        return _run_review_promote(settings, args)
+    raise RuntimeError(f"Unsupported review command: {args.review_command}")
+
+
 def _research(settings: HarnessSettings, args: argparse.Namespace) -> int:
+    if args.research_command == "review":
+        return _run_review(settings, args)
+
     if args.research_command == "canary":
         return _run_research_canary(settings, args)
 
@@ -1156,6 +1548,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Thread: {thread_id}", file=sys.stderr)
             print("Checkpoint preserved.", file=sys.stderr)
             print("Resume with the same --thread.", file=sys.stderr)
+        elif (
+            args.command == "research"
+            and args.research_command == "review"
+            and args.review_command in {"start", "resume", "synthesize", "canary"}
+        ):
+            print(f"Thread: {args.thread}", file=sys.stderr)
+            print("Checkpoint and completed batch artifacts preserved.", file=sys.stderr)
+            print(
+                "Resume with: research review resume "
+                f"{args.research_id} --thread {args.thread}",
+                file=sys.stderr,
+            )
         return 130
     except (
         FileNotFoundError,

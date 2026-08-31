@@ -11,6 +11,10 @@ Research Harness 的内外循环设计。
 
 当前自动执行边界也需要先说明：
 
+- 新增独立 Fast Research Loop，可在不执行 Full Ingest 的情况下完成多源检索、
+  两级阅读、EvidenceCard 抽取、非共识判断和确定性 Markdown 综述；
+- Fast Loop 不写 Wiki，人工批准的 `PromotionManifest` 才进入现有 Durable Evidence Loop；
+
 - Wiki 查询、索引、关系解析和校验已经实现；
 - DeepXiv 检索、归一化、去重、search-run 回写和验证已经实现；
 - Outer Research Loop 可以检查研究状态、计算 Gap、判断 Done，并执行后重新观察真源；
@@ -18,7 +22,8 @@ Research Harness 的内外循环设计。
 - `ingest` 已覆盖受控 arXiv PDF 交接、结构化抽取、shadow validation 和原子 Wiki 发布；
 - `verify` 已覆盖页码/数值/关系预检、语义复核和 guarded lifecycle transition；
 - `analyze_claims` 已覆盖 verified evidence 的条件对齐和 non-consensus assessment；
-- `expand_citations` 和最终综述/PPT synthesis 仍待实现。
+- 任意 JavaScript 网页浏览、HTML 前端和自动 PPT synthesis 不属于 Review V1；
+  Markdown 科研综述 synthesis 已实现。
 
 ## 1. 系统目标
 
@@ -89,7 +94,7 @@ DeepXiv 搜索结果只能形成 candidate coverage。只有被摄取到 Wiki、
 | 配置和过程记录 | PyYAML | Wiki frontmatter、schema、search-run、DoneCriteria |
 | 知识存储 | Markdown + YAML frontmatter | 人可读、Git 可审计的 Wiki 真源 |
 | 可重建索引 | JSON | entities、edges、aliases、backlinks、diagnostics、stats |
-| 学术检索 | `deepxiv-sdk` 1.0 | 通过 `Reader.search` 执行论文发现 |
+| 学术检索 | DeepXiv SDK + Semantic Scholar Graph REST | 双论文索引发现、跨来源去重与发现 provenance |
 | 模型适配 | `langchain-openai` | 当前 OpenAI Chat Model 适配器 |
 | CLI | Python `argparse` | doctor、run、research、skills、Wiki 等命令 |
 | 测试 | Python `unittest` | Harness、Wiki Engine、搜索脚本回归测试 |
@@ -446,7 +451,8 @@ Gap 路由规则：
 5. 页面固定写成 `needs-review / verified: false`，必须由独立 `verify` 晋升。
 
 没有注入本地语义实现且未配置模型时，对应动作不会出现在 executor capability set。
-Controller 会跳过不可执行 Gap；未实现的 citation/synthesis 动作不会假装已执行。
+旧 Durable Controller 会跳过不可执行 Gap；citation expansion 仍不会假装已执行。
+科研综述 synthesis 由独立 `review_control.py` Fast Loop 执行，不进入旧 action table。
 
 ### 6.11 `research_control.py`：Outer Research Loop
 
@@ -919,6 +925,6 @@ Q01-Q08 = planned
 3. 根据真实 valid discovery rounds 校准 search saturation，并另行定义 evidence saturation；
 4. 接入 backward/forward citation expansion；
 5. 增加 repository ownership、kernel build 和 reproducibility 证据链；
-6. 最后实现综述 Markdown/PPT synthesis、引用审计和报告质量评估。
+6. Markdown 综述和引用审计已经落地；下一阶段再接 PPT synthesis 与报告质量人工评估。
 
 在这些动作具备确定性前置条件、结果契约和回归测试之前，不建议加入“智能 Skill Router”。

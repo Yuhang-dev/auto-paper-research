@@ -104,7 +104,11 @@ $env:HARNESS_DB_PATH = "D:/wiki-papersearch/.harness/research-harness.sqlite3"
 | `OPENAI_API_BASE` | A | 无 | 旧 LangChain-compatible endpoint 变量；仅在未设置规范变量时读取 |
 | `OPENAI_BASE_URL` | A | 无 | 旧 OpenAI SDK-compatible endpoint 变量；与同时存在的 `OPENAI_API_BASE` 不一致时拒绝启动 |
 | `OPENAI_API_KEY` | A | 无 | OpenAI-compatible endpoint 的凭证；本地无鉴权服务也需非空 sentinel |
-| `DEEPXIV_TOKEN` | A | 无 | DeepXiv SDK 凭证；没有时联网检索返回 `blocked-credential` |
+| `DEEPXIV_TOKEN` | A | 无 | DeepXiv SDK 凭证；没有时论文发现 provider 不可用 |
+| `SEMANTIC_SCHOLAR_API_KEY` | A | 无 | 可选的 Semantic Scholar Academic Graph 凭证；配置后启用第二论文发现源 |
+| `S2_API_KEY` | F | 无 | `SEMANTIC_SCHOLAR_API_KEY` 的兼容别名；规范变量优先 |
+| `TAVILY_API_KEY` | A | 无 | Review Fast Loop 的 Web/官方项目页检索凭证；standard profile 必需 |
+| `GITHUB_TOKEN` | A | 无 | GitHub REST 凭证；可选，但 standard 正式运行建议配置以避免匿名限流 |
 | `LANGGRAPH_STRICT_MSGPACK` | A/F | `true` | 持久化兼容保护；`persistence.py` 只在未设置时写入 `true` |
 | `TIKTOKEN_CACHE_DIR` | A | `.harness/tiktoken-cache`（子进程 fallback） | 将 tokenizer 缓存保留在 D 盘项目目录 |
 | `PDFTOTEXT_PATH` | A | 自动发现 | `pypdf` 不可用时的 `pdftotext` 可执行文件路径 |
@@ -113,7 +117,52 @@ $env:HARNESS_DB_PATH = "D:/wiki-papersearch/.harness/research-harness.sqlite3"
 
 Key 不得写入 `.env`、Search Run YAML、Wiki、SQLite memory、命令参数或日志。
 
-### 3.3 SQLite 固定参数
+### 3.3 Review-first 双模型与漏斗参数
+
+| 参数 | 类别 | 默认 / 回退 | 作用 |
+|---|---|---|---|
+| `HARNESS_FAST_MODEL` | A | `HARNESS_MODEL` | query planning、screening、Skim 的 `openai:<id>` |
+| `HARNESS_FAST_MODEL_BASE_URL` | A | `HARNESS_MODEL_BASE_URL` | Fast OpenAI-compatible endpoint |
+| `HARNESS_FAST_API_KEY` | A | `OPENAI_API_KEY` | Fast endpoint 凭证 |
+| `HARNESS_REASONING_MODEL` | A | 无 | Deep Read、EvidenceCard、reasoning、synthesis 模型 |
+| `HARNESS_REASONING_MODEL_BASE_URL` | A | 无 | Reasoning endpoint |
+| `HARNESS_REASONING_API_KEY` | A | 无 | Reasoning endpoint 凭证 |
+| `--allow-single-model-fallback` | A | `false` | 明确允许 Fast 模型兼任 Reasoning；standard 缺少 Reasoning 配置且未传此项会失败 |
+| `--profile` | A | `standard` | `standard` 或 `smoke` |
+| `--stop-after` | A | `synthesis` | 在指定 Review stage 后有界停止 |
+| `--thread` | R | 必填 | SQLite checkpoint 身份 |
+| `--run-id` | R | 自动生成 | artifact 身份；必须为安全 ASCII 文件名 |
+
+V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 CLI 覆盖：
+
+| 参数 | 类别 | smoke | standard |
+|---|---|---:|---:|
+| `max_sources` | I | 8 | 50 |
+| `max_skims` | I | 4 | 20 |
+| `max_deep_reads` | I | 2 | 10 |
+| `max_promotions` | I | 0 | 6 |
+| paper / project / web soft quota | I | 5 / 1 / 2 | 30 / 10 / 10 |
+| `max_search_rounds` | I | 1 | 3 |
+| `max_queries` | I | 4 | 12 |
+| network / skim / deep-read concurrency | I | 4 / 2 / 2 | 4 / 2 / 2 |
+
+Review readiness 是计算结果，不可通过 YAML 直接填写：
+
+| 指标 | 类别 | 计算语义 |
+|---|---|---|
+| `facet_statuses` | C | 每个 facet 按独立 EvidenceCard 来源数计算 missing/partial/covered |
+| `citation_ready_cards` | C | 合法且有 locator/hash 的 EvidenceCard 数 |
+| `evidenced_claims` | C | 至少关联一个支持或反对卡片的 UnderstandingClaim 数 |
+| `independent_sources` | C | Evidence Pool 中唯一 source ID 数 |
+| `unresolved_blocking_ids` | C | 仍为 open 且 blocking 的 uncertainty |
+| `nonconsensus_review_complete` | C | 已产生合法 assessment，或范围没有非共识问题 |
+| `saturated` | C | 连续两轮无新路线、卡片、blocking resolution 和独立反证 |
+| `ready` | C | facet/evidence/uncertainty/nonconsensus/saturation 的组合判断 |
+
+Review profile 达到预算但 `ready=false` 时仍生成有界综述，并把缺口写入报告；不会
+伪造完成状态。旧 `DoneCriteria` 继续服务 Durable Evidence Loop，不控制 Fast Loop。
+
+### 3.4 SQLite 固定参数
 
 以下是内部实现参数，不是正式调参接口：
 

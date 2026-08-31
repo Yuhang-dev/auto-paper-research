@@ -1329,11 +1329,14 @@ class PaperIngestPipeline:
         *,
         preview: bool = False,
         defer_wiki: bool = False,
+        validate_deferred: bool = False,
         research_id: Optional[str] = None,
         artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> PaperIngestResult:
         if preview and defer_wiki:
             raise ValueError("preview and defer_wiki are mutually exclusive")
+        if validate_deferred and not defer_wiki:
+            raise ValueError("validate_deferred requires defer_wiki")
         if defer_wiki and (self.stage_store is None or not research_id):
             raise ValueError(
                 "Deferred Wiki ingestion requires a stage store and research_id"
@@ -1405,6 +1408,22 @@ class PaperIngestPipeline:
         if defer_wiki:
             assert self.stage_store is not None
             assert research_id is not None
+            deferred_codes: Tuple[str, ...] = ()
+            if validate_deferred:
+                compiled_preview = self.compiler.compile(draft)
+                deferred_diagnostics = self.writer.validate(compiled_preview.pages)
+                deferred_errors = tuple(
+                    item for item in deferred_diagnostics if item.severity == "ERROR"
+                )
+                if deferred_errors:
+                    raise PaperIngestError(
+                        "Deferred draft failed shadow Wiki validation: "
+                        + ", ".join(item.code for item in deferred_errors)
+                    )
+                deferred_codes = (
+                    "promotion-evidence-boundary-checked",
+                    "staged-shadow-validation-passed",
+                )
             staged, staged_path = self.stage_store.stage(
                 research_id=research_id,
                 candidate=candidate,
@@ -1427,6 +1446,7 @@ class PaperIngestPipeline:
                     dict.fromkeys(
                         (
                             "wiki-publication-deferred",
+                            *deferred_codes,
                             *(
                                 ("structured-output-schema-repaired",)
                                 if extraction.schema_repair_applied
@@ -1506,6 +1526,8 @@ class StagedWikiPublisher:
     ):
         self.settings = settings
         self.store = store
+        self.registry = SkillRegistry(settings.skills_root)
+        self.skill = self.registry.get("wiki-link")
         self.compiler = WikiDraftCompiler(
             settings.wiki_root,
             settings.wiki_meta_root,

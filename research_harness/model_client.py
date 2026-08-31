@@ -2,12 +2,120 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from dataclasses import dataclass
+from typing import Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
 from .config import HarnessSettings
+
+
+@dataclass(frozen=True)
+class ModelProfile:
+    """One OpenAI-compatible endpoint without serializing its credential."""
+
+    role: str
+    model: str
+    base_url: str
+    api_key: str
+
+    @property
+    def served_model_name(self) -> str:
+        return self.model.split(":", 1)[1].strip()
+
+    @property
+    def fingerprint(self) -> str:
+        payload = json.dumps(
+            {
+                "adapter": "langchain-openai",
+                "role": self.role,
+                "model": self.served_model_name,
+                "base_url": self.base_url.rstrip("/"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ReviewModelBundle:
+    fast: ModelProfile
+    reasoning: ModelProfile
+    single_model_fallback: bool = False
+
+    @property
+    def fingerprint(self) -> str:
+        payload = f"{self.fast.fingerprint}:{self.reasoning.fingerprint}"
+        return hashlib.sha256(payload.encode("ascii")).hexdigest()
+
+    @classmethod
+    def from_env(
+        cls,
+        settings: HarnessSettings,
+        *,
+        allow_single_model_fallback: bool,
+        require_reasoning: bool,
+    ) -> "ReviewModelBundle":
+        fast_model = os.getenv("HARNESS_FAST_MODEL", "").strip() or settings.model
+        fast_base = (
+            os.getenv("HARNESS_FAST_MODEL_BASE_URL", "").strip()
+            or settings.model_base_url
+        )
+        fast_key = (
+            os.getenv("HARNESS_FAST_API_KEY", "").strip()
+            or os.getenv("OPENAI_API_KEY", "").strip()
+        )
+        if not fast_model or not fast_base or not fast_key:
+            raise ValueError(
+                "Review fast-model configuration requires HARNESS_FAST_MODEL, "
+                "HARNESS_FAST_MODEL_BASE_URL, and HARNESS_FAST_API_KEY; legacy "
+                "HARNESS_MODEL/HARNESS_MODEL_BASE_URL/OPENAI_API_KEY are accepted"
+            )
+        _validate_profile(settings, fast_model, fast_base)
+        fast = ModelProfile("fast", fast_model, fast_base, fast_key)
+
+        reasoning_model = os.getenv("HARNESS_REASONING_MODEL", "").strip()
+        reasoning_base = os.getenv("HARNESS_REASONING_MODEL_BASE_URL", "").strip()
+        reasoning_key = os.getenv("HARNESS_REASONING_API_KEY", "").strip()
+        reasoning_complete = bool(reasoning_model and reasoning_base and reasoning_key)
+        reasoning_any = bool(reasoning_model or reasoning_base or reasoning_key)
+        if reasoning_any and not reasoning_complete:
+            raise ValueError(
+                "HARNESS_REASONING_MODEL, HARNESS_REASONING_MODEL_BASE_URL, and "
+                "HARNESS_REASONING_API_KEY must be configured together"
+            )
+        if not reasoning_complete:
+            if require_reasoning and not allow_single_model_fallback:
+                raise ValueError(
+                    "The standard review profile requires a reasoning-model profile. "
+                    "Configure HARNESS_REASONING_* or explicitly use "
+                    "--allow-single-model-fallback"
+                )
+            reasoning = ModelProfile(
+                "reasoning", fast.model, fast.base_url, fast.api_key
+            )
+            return cls(fast=fast, reasoning=reasoning, single_model_fallback=True)
+        assert reasoning_model and reasoning_base and reasoning_key
+        _validate_profile(settings, reasoning_model, reasoning_base)
+        return cls(
+            fast=fast,
+            reasoning=ModelProfile(
+                "reasoning", reasoning_model, reasoning_base, reasoning_key
+            ),
+        )
+
+
+def _validate_profile(
+    settings: HarnessSettings,
+    model: str,
+    base_url: str,
+) -> None:
+    settings.with_model(model, model_base_url=base_url)
 
 
 def create_chat_model(settings: HarnessSettings) -> BaseChatModel:
@@ -30,3 +138,24 @@ def create_chat_model(settings: HarnessSettings) -> BaseChatModel:
         base_url=settings.model_base_url,
         api_key=api_key,
     )
+
+
+def create_profile_chat_model(profile: ModelProfile) -> BaseChatModel:
+    """Create a deterministic client for one review task profile."""
+
+    return ChatOpenAI(
+        model=profile.served_model_name,
+        base_url=profile.base_url,
+        api_key=profile.api_key,
+        temperature=0,
+        max_retries=1,
+        timeout=120,
+    )
+
+
+__all__ = [
+    "ModelProfile",
+    "ReviewModelBundle",
+    "create_chat_model",
+    "create_profile_chat_model",
+]

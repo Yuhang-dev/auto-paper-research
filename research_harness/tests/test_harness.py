@@ -260,10 +260,15 @@ class SkillRegistryTests(HarnessTestCase):
         self.assertEqual(
             (
                 "analyze-claims",
+                "evidence-extract",
                 "ingest-paper",
+                "project-audit",
+                "review-synthesize",
                 "revise-evidence",
                 "search-paper",
+                "source-skim",
                 "verify-evidence",
+                "wiki-link",
             ),
             registry.names,
         )
@@ -323,10 +328,15 @@ class SkillRegistryTests(HarnessTestCase):
         self.assertEqual(
             (
                 "analyze-claims",
+                "evidence-extract",
                 "ingest-paper",
+                "project-audit",
+                "review-synthesize",
                 "revise-evidence",
                 "search-paper",
+                "source-skim",
                 "verify-evidence",
+                "wiki-link",
             ),
             harness.skill_registry.names,
         )
@@ -1447,7 +1457,7 @@ class HarnessCliTests(HarnessTestCase):
             )
         listed = json.loads(list_output.getvalue())
         self.assertEqual(0, list_exit)
-        self.assertEqual(5, listed["count"])
+        self.assertEqual(10, listed["count"])
 
         show_output = io.StringIO()
         with redirect_stdout(show_output):

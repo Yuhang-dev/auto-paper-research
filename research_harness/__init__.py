@@ -14,6 +14,14 @@ from .paper_ingest import PaperIngestPipeline, StagedWikiPublisher
 from .staged_ingest import StagedPaperRecord, StagedPaperStore
 from .search_runtime import SearchRuntime
 from .research_control import AutonomousResearchController, ResearchController
+from .review_control import ReviewController
+from .review_models import (
+    EvidenceCard,
+    PromotionManifest,
+    ReviewRunConfig,
+    SourceRecord,
+    SourceSkim,
+)
 from .research_models import (
     ActionAttemptStats,
     DoneCriteria,
@@ -41,6 +49,12 @@ __all__ = [
     "IngestCandidate",
     "ResearchController",
     "AutonomousResearchController",
+    "ReviewController",
+    "ReviewRunConfig",
+    "SourceRecord",
+    "SourceSkim",
+    "EvidenceCard",
+    "PromotionManifest",
     "ResearchSnapshot",
     "ResearchGap",
     "ResearchDecision",

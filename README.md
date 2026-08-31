@@ -14,6 +14,7 @@
 
 完整的模块技术栈、系统流程、总体架构和 Harness 内部实现见：
 
+- [`docs/REVIEW_FIRST_HARNESS.md`](docs/REVIEW_FIRST_HARNESS.md)：面向科研综述的 Fast/Durable 双环、命令与证据边界
 - [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md)
 - [`docs/PARAMETERS_AND_METRICS.md`](docs/PARAMETERS_AND_METRICS.md)：全部可调参数、计算指标、公式与内部限制
 - [`docs/CANARY_AND_EVALUATION.md`](docs/CANARY_AND_EVALUATION.md)：隔离联网测试、硬边界与分阶段验收
@@ -27,6 +28,23 @@
 - `research/long-context-sparse-models/search-runs/v0-discovery.yaml`
 
 ## LangGraph Research Harness
+
+当前默认科研综述路径已经与知识库填充路径分离：
+
+```text
+Fast Research Loop
+问题 → 多源检索 → Skim → 不确定性驱动补搜 → Deep Read
+     → EvidenceCard → 带引用综述
+
+人工批准后：PromotionManifest → Full Ingest → staged-for-wiki
+                         → 显式 publish-staged → 正式 Wiki
+```
+
+标准漏斗是 `50 → 20 Skim → 10 Deep Read → 最多 6 篇晋升`，Smoke 是
+`8 → 4 → 2 → 0`。Fast Loop 不读取完整 Wiki 进模型上下文，也不写正式 Wiki。
+论文发现默认使用 DeepXiv；设置 `SEMANTIC_SCHOLAR_API_KEY` 后会同时启用
+Semantic Scholar Academic Graph，并在共享的论文配额内去重。使用说明见
+`docs/REVIEW_FIRST_HARNESS.md`。
 
 项目现在用 LangGraph 作为编排层。确定性的 Wiki parser、resolver、validator、
 query 与 DeepXiv 脚本仍是普通 Python 能力。系统分为 inner tool loop、Skill
@@ -142,8 +160,8 @@ frontmatter、路径穿越和逃逸 Skill 根目录的资源。
 当前边界刻意保持简单：
 
 ```text
-已实现：SkillRegistry + 按需资源读取 + search/ingest/verify/revise_evidence/analyze_claims 显式 executor
-未实现：LLM Skill Router / 通用 SkillExecutor / citation expansion / synthesis subgraph
+已实现：SkillRegistry + 按需资源读取 + 旧 Durable executor + 独立 Review synthesis graph
+未实现：LLM Skill Router / 通用 SkillExecutor / 任意网页浏览 / 自动 PPT synthesis
 ```
 
 Registry 本身仍只负责发现和检查。Outer Loop 使用显式 action table：`search`
@@ -196,15 +214,16 @@ facet 的 candidate coverage 与 evidence coverage 均为 `missing`。因此最�
 
 ### Install
 
-依赖已安装在 Conda `(base)`，项目同时保留精确版本文件：
+建议安装在独立 Conda `(paper-harness)` 环境，项目同时保留版本文件：
 
 ```powershell
-D:\anaconda3\python.exe -m pip install -r requirements-harness.txt
+D:\anaconda3\envs\paper-harness\python.exe -m pip install -r requirements-harness.txt
 ```
 
 当前锁定：LangChain 1.3.17、LangGraph 1.2.11、
 `langgraph-checkpoint-sqlite` 3.1.1、`langchain-openai` 1.6.0 和
-PyYAML 6.0.2、Pydantic 2.10.3、`deepxiv-sdk` 1.0.0 和 pypdf 6.16.2。
+PyYAML 6.0.2、Pydantic 2.10.3、`deepxiv-sdk` 1.0.0、Tavily Python SDK
+和 pypdf 6.16.2。
 
 ### Configure
 
