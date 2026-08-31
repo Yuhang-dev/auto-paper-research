@@ -32,6 +32,7 @@ from .review_logic import (
     canonical_repository,
     canonical_url,
     stable_id,
+    web_source_authority,
 )
 from .review_models import (
     DiscoveryRecord,
@@ -480,7 +481,16 @@ class TavilyProvider:
                             ),
                         ),
                     ),
-                    metadata={"published_date": row.get("published_date")},
+                    metadata={
+                        "published_date": row.get("published_date"),
+                        "source_authority": (
+                            "primary-paper"
+                            if source_type == "paper"
+                            else "repository"
+                            if source_type == "project"
+                            else web_source_authority(normalized_url)
+                        ),
+                    },
                 )
             )
         return tuple(result)

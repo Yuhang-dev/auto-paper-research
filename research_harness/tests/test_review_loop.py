@@ -20,7 +20,11 @@ from research_harness.review_control import ReviewController
 from research_harness.review_errorbook import aggregate_review_error_book
 from research_harness.review_logic import (
     merge_sources,
+    sanitize_provisional_skim,
+    select_for_deep_read,
+    source_evidence_eligible,
     validate_nonconsensus_assessment,
+    web_source_authority,
 )
 from research_harness.review_models import (
     DiscoveryRecord,
@@ -53,6 +57,7 @@ from research_harness.review_providers import (
     _semantic_scholar_paper_details,
 )
 from research_harness.review_storage import ReviewArtifactStore
+from research_harness.review_semantics import _web_card_supported
 
 
 NOW = "2026-08-31T00:00:00Z"
@@ -78,6 +83,7 @@ def _web_source(index: int, query_id: str = "R01Q01") -> SourceRecord:
         content_preview=f"Located technical material for sparse context source {index}.",
         target_facets=FACETS,
         discoveries=(_discovery(query_id, index),),
+        metadata={"source_authority": "official"},
     )
 
 
@@ -317,6 +323,130 @@ class ReviewLoopTests(unittest.TestCase):
         skim = FakeReviewEngine().skim_source(source=_web_source(1), scope=self.scope)
         self.assertTrue(skim.provisional)
         self.assertFalse(skim.citation_eligible)
+
+    def test_deep_read_prefers_primary_studies_and_rejects_secondary_mirrors(self):
+        config = self._config(run_id="selection-run")
+
+        def paper(source_id, title, arxiv_id):
+            return SourceRecord(
+                source_id=source_id,
+                source_type="paper",
+                provider="deepxiv",
+                title=title,
+                canonical_url=f"https://arxiv.org/abs/{arxiv_id}",
+                arxiv_id=arxiv_id,
+                discoveries=(
+                    DiscoveryRecord(
+                        query_id="R01Q01",
+                        provider="deepxiv",
+                        rank=1,
+                        retrieved_at=NOW,
+                    ),
+                ),
+            )
+
+        sources = (
+            paper("paper:survey", "Efficient Attention: A Survey", "2501.00001"),
+            paper("paper:study-a", "Dynamic Sparse Attention", "2501.00002"),
+            paper("paper:study-b", "Block Sparse Attention", "2501.00003"),
+            SourceRecord(
+                source_id="web:official",
+                source_type="web",
+                provider="tavily",
+                title="Official conference poster",
+                canonical_url="https://neurips.cc/virtual/2025/poster/1",
+                discoveries=(_discovery("R01Q02"),),
+            ),
+            SourceRecord(
+                source_id="web:mirror",
+                source_type="web",
+                provider="tavily",
+                title="Mirrored paper",
+                canonical_url="https://www.researchgate.net/publication/1",
+                discoveries=(_discovery("R01Q02", 2),),
+            ),
+        )
+        skims = {
+            item.source_id: SourceSkim(
+                source_id=item.source_id,
+                source_type=item.source_type,
+                label="core",
+                relevance_score=0.99 if item.source_id != "paper:study-b" else 0.94,
+                why_relevant="Fixture candidate for deterministic selection.",
+                target_facets=FACETS,
+                select_for_deep_read=True,
+                basis="abstract" if item.source_type == "paper" else "source-excerpt",
+            )
+            for item in sources
+        }
+
+        selected = select_for_deep_read(sources, skims, config)
+
+        self.assertEqual(("paper:study-a", "paper:study-b"), selected)
+        self.assertNotIn("paper:survey", selected)
+        self.assertNotIn("web:mirror", selected)
+
+    def test_web_authority_and_skim_numeric_guards_are_deterministic(self):
+        self.assertEqual(
+            "secondary-aggregator",
+            web_source_authority("https://www.researchgate.net/publication/1"),
+        )
+        official = _web_source(1).model_copy(
+            update={
+                "canonical_url": "https://neurips.cc/virtual/2025/poster/1",
+                "metadata": {},
+            }
+        )
+        self.assertTrue(source_evidence_eligible(official))
+        mirror = official.model_copy(
+            update={
+                "source_id": "web:mirror",
+                "canonical_url": "https://www.researchgate.net/publication/1",
+            }
+        )
+        self.assertFalse(source_evidence_eligible(mirror))
+        findings, questions = sanitize_provisional_skim(
+            (
+                "The method uses dynamic sparse attention.",
+                "The abstract claims a 7.9× speedup at 128K context.",
+            ),
+            ("Which benchmark was used?",),
+        )
+        self.assertEqual(("The method uses dynamic sparse attention.",), findings)
+        self.assertTrue(any("quantitative" in item for item in questions))
+
+    def test_static_web_cannot_supply_experimental_or_invented_figure_cards(self):
+        material = SourceMaterial(
+            source_id="web:official",
+            media_type="web-content",
+            sha256="a" * 64,
+            text="Abstract\nThe authors describe a sparse attention method.",
+            acquired_at=NOW,
+        )
+        base = EvidenceCard(
+            card_id="card:web",
+            source_id="web:official",
+            source_url="https://neurips.cc/virtual/2025/poster/1",
+            source_version="captured",
+            source_sha256=material.sha256,
+            statement="The official abstract describes sparse attention.",
+            attribution="author",
+            evidence_type="author-discussion",
+            status="located",
+            locator=EvidenceLocator(kind="section", value="Abstract"),
+        )
+        self.assertTrue(_web_card_supported(base, material))
+        self.assertFalse(
+            _web_card_supported(
+                base.model_copy(
+                    update={
+                        "evidence_type": "experiment",
+                        "locator": EvidenceLocator(kind="figure", value="Figure 9"),
+                    }
+                ),
+                material,
+            )
+        )
 
     def test_standard_model_profile_requires_reasoning_or_explicit_fallback(self):
         configured = replace(

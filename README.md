@@ -44,6 +44,8 @@ Fast Research Loop
 `8 → 4 → 2 → 0`。Fast Loop 不读取完整 Wiki 进模型上下文，也不写正式 Wiki。
 论文发现默认使用 DeepXiv；设置 `SEMANTIC_SCHOLAR_API_KEY` 后，只对进入 Deep
 Read 的少量论文补充 Semantic Scholar citation 和外部 ID，不执行 S2 大页批量发现。
+Deep Read 不复用检索来源比例：Smoke 优先保留 2 篇原始论文，standard 至少优先
+保留 6 篇；ResearchGate、Academia.edu 等镜像只作导航，不能产生正式证据。
 使用说明见 `docs/REVIEW_FIRST_HARNESS.md`。
 
 项目现在用 LangGraph 作为编排层。确定性的 Wiki parser、resolver、validator、

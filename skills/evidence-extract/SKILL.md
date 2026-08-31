@@ -29,11 +29,17 @@ Every card must preserve:
 ## Rules
 
 - Extract only what the supplied source supports.
+- Do not extract citation-ready evidence from ResearchGate, Academia.edu,
+  Scribd, or another secondary mirror. Resolve the primary paper first.
 - Preserve experimental conditions with every number or comparison.
 - Do not compare two systems unless the source reports comparable settings.
 - Do not convert absence of evidence into a negative result.
 - Do not label an item cross-checked or verified merely because it was extracted.
 - Exclude useful-looking statements that lack a usable locator.
+- A static official Web page may support metadata or author discussion, but it
+  must not substitute for a paper PDF when making quantitative experimental
+  claims. Page-level Web evidence must use a section found in the supplied
+  content or the canonical page URL.
 - Keep different experiments and conclusions in separate cards.
 
 ## Output

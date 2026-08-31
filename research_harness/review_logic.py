@@ -28,6 +28,43 @@ TRACKING_QUERY_NAMES = frozenset(
     {"fbclid", "gclid", "ref", "ref_src", "source", "mc_cid", "mc_eid"}
 )
 TYPE_ORDER = {"paper": 0, "project": 1, "web": 2}
+SECONDARY_AGGREGATOR_HOSTS = frozenset(
+    {
+        "academia.edu",
+        "researchgate.net",
+        "scribd.com",
+    }
+)
+OFFICIAL_WEB_HOSTS = frozenset(
+    {
+        "aclanthology.org",
+        "ai.meta.com",
+        "developer.nvidia.com",
+        "docs.nvidia.com",
+        "docs.pytorch.org",
+        "docs.vllm.ai",
+        "huggingface.co",
+        "iclr.cc",
+        "jmlr.org",
+        "mlsys.org",
+        "neurips.cc",
+        "openreview.net",
+        "papers.nips.cc",
+        "proceedings.iclr.cc",
+        "proceedings.mlr.press",
+        "proceedings.neurips.cc",
+        "pytorch.org",
+        "research.google",
+        "vllm.ai",
+    }
+)
+UNVERIFIED_QUANTITATIVE_FINDING = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*(?:%|×|x\b|times?\b|fold\b|ms\b|gb\b|"
+    r"tokens?\b|[km]\b))|(?:speedup|latency|throughput|memory|accuracy|"
+    r"perplexity|loss|improv\w*|reduc\w*|outperform\w*).{0,50}\d",
+    re.IGNORECASE,
+)
+SURVEY_TITLE = re.compile(r"\bsurvey\b|\bsystematic review\b", re.IGNORECASE)
 T = TypeVar("T")
 
 
@@ -87,6 +124,78 @@ def canonical_repository(value: str) -> str:
     if len(parts) != 2:
         raise ValueError(f"GitHub repository must be owner/name: {value!r}")
     return f"{parts[0].casefold()}/{parts[1].removesuffix('.git').casefold()}"
+
+
+def _host_matches(host: str, candidates: Iterable[str]) -> bool:
+    return any(host == item or host.endswith(f".{item}") for item in candidates)
+
+
+def web_source_authority(value: str) -> str:
+    """Classify Web evidence conservatively from its canonical host."""
+
+    parsed = urlsplit(canonical_url(value))
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    if _host_matches(host, SECONDARY_AGGREGATOR_HOSTS):
+        return "secondary-aggregator"
+    if _host_matches(host, OFFICIAL_WEB_HOSTS):
+        return "official"
+    return "unknown"
+
+
+def source_authority(source: SourceRecord) -> str:
+    declared = str(source.metadata.get("source_authority") or "").strip()
+    if declared in {
+        "primary-paper",
+        "repository",
+        "official",
+        "secondary-aggregator",
+        "unknown",
+    }:
+        return declared
+    if source.source_type == "paper":
+        return "primary-paper"
+    if source.source_type == "project":
+        return "repository"
+    return web_source_authority(source.canonical_url)
+
+
+def source_evidence_eligible(source: SourceRecord) -> bool:
+    """Only first-party artifacts may enter citation-ready deep reading."""
+
+    return source_authority(source) in {
+        "primary-paper",
+        "repository",
+        "official",
+    }
+
+
+def sanitize_provisional_skim(
+    findings: Sequence[str],
+    questions: Sequence[str],
+) -> tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Remove unverified numeric results before Skims enter reasoning context."""
+
+    retained = []
+    omitted = 0
+    for finding in findings:
+        if UNVERIFIED_QUANTITATIVE_FINDING.search(finding):
+            omitted += 1
+        else:
+            retained.append(finding)
+    pending = list(questions)
+    if omitted:
+        pending.append(
+            "Which quantitative performance claims survive full-text evidence "
+            "checking under their original experimental conditions?"
+        )
+    return (
+        tuple(dict.fromkeys(retained)),
+        tuple(dict.fromkeys(pending)),
+    )
+
+
+def source_is_survey(source: SourceRecord) -> bool:
+    return bool(SURVEY_TITLE.search(source.title))
 
 
 def source_identity(source: SourceRecord) -> str:
@@ -286,13 +395,34 @@ def select_for_deep_read(
     ranked = []
     for source_id, skim in skims.items():
         source = by_id.get(source_id)
-        if source is None or skim.label == "exclude":
+        if (
+            source is None
+            or skim.label == "exclude"
+            or not skim.select_for_deep_read
+            or not source_evidence_eligible(source)
+        ):
             continue
-        score = skim.relevance_score + (0.2 if skim.select_for_deep_read else 0.0)
+        score = skim.relevance_score + 0.2
         score += min(len(skim.target_facets), 5) * 0.01
+        if source_is_survey(source):
+            score -= 0.25
         ranked.append((score, source, source_id))
     ranked.sort(key=lambda item: (-item[0], source_identity(item[1]), item[2]))
-    return _stratified_select(ranked, limit=config.max_deep_reads, config=config)
+    required_papers = min(
+        config.minimum_deep_read_papers,
+        config.max_deep_reads,
+    )
+    selected = [
+        item for item in ranked if item[1].source_type == "paper"
+    ][:required_papers]
+    selected_ids = {item[1].source_id for item in selected}
+    remaining = [item for item in ranked if item[1].source_id not in selected_ids]
+    slots = config.max_deep_reads - len(selected)
+    if slots > 0:
+        additions = _stratified_select(remaining, limit=slots, config=config)
+    else:
+        additions = ()
+    return tuple(item[2] for item in selected) + additions
 
 
 def validate_nonconsensus_assessment(

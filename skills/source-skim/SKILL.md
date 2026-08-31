@@ -34,10 +34,15 @@ input.
 
 - A skim is provisional and is not report evidence.
 - Do not emit exact quantitative claims from a search snippet or abstract.
+- Treat ResearchGate, Academia.edu, Scribd, and similar mirrors as navigation
+  clues only. They must not be selected for evidence extraction; locate the
+  paper's arXiv, DOI, publisher, proceedings, or OpenReview record instead.
 - Do not invent a PDF page, table, figure, section, implementation detail, or
   experimental condition.
 - Phrase uncertainty explicitly when the excerpt is incomplete.
 - Prefer exclusion over forced relevance when the source is outside scope.
+- A survey may guide taxonomy and citation chasing, but primary studies should
+  receive the scarce experimental Deep Read slots.
 
 ## Output
 

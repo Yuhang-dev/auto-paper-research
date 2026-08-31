@@ -58,6 +58,7 @@ class ReviewRunConfig(ReviewModel):
     max_sources: int = Field(ge=1, le=500)
     max_skims: int = Field(ge=1, le=200)
     max_deep_reads: int = Field(ge=1, le=100)
+    minimum_deep_read_papers: int = Field(default=2, ge=0, le=100)
     max_promotions: int = Field(ge=0, le=50)
     paper_source_quota: int = Field(ge=0)
     project_source_quota: int = Field(ge=0)
@@ -88,6 +89,10 @@ class ReviewRunConfig(ReviewModel):
             raise ValueError("max_skims cannot exceed max_sources")
         if self.max_deep_reads > self.max_skims:
             raise ValueError("max_deep_reads cannot exceed max_skims")
+        if self.minimum_deep_read_papers > self.max_deep_reads:
+            raise ValueError(
+                "minimum_deep_read_papers cannot exceed max_deep_reads"
+            )
         if self.max_promotions > self.max_deep_reads:
             raise ValueError("max_promotions cannot exceed max_deep_reads")
         quota_total = (
@@ -139,6 +144,7 @@ class ReviewRunConfig(ReviewModel):
                 "max_sources": 8,
                 "max_skims": 4,
                 "max_deep_reads": 2,
+                "minimum_deep_read_papers": 2,
                 "max_promotions": 0,
                 "paper_source_quota": 5,
                 "project_source_quota": 1,
@@ -151,6 +157,7 @@ class ReviewRunConfig(ReviewModel):
                 "max_sources": 50,
                 "max_skims": 20,
                 "max_deep_reads": 10,
+                "minimum_deep_read_papers": 6,
                 "max_promotions": 6,
                 "paper_source_quota": 30,
                 "project_source_quota": 10,

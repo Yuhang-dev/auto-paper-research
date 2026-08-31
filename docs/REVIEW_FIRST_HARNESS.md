@@ -35,6 +35,11 @@ Deep Read 论文后，按 arXiv ID 或 DOI 为这些少量论文补充 citation 
 和外部 ID。从第二轮开始，未填满的全局来源预算可以被仍有结果的检索 provider
 重新利用；最终总来源始终受 `max_sources` 约束。
 
+来源软配额只服务于发现和 Skim 多样性，不再直接决定 Deep Read。Deep Read
+优先满足原始论文下限：Smoke 为 2，standard 为 6；剩余名额再按证据价值补充
+官方项目和一手 Web 资料。标题明确为 survey 的论文会降权，但仍可用于技术谱系。
+ResearchGate、Academia.edu、Scribd 等聚合镜像只保留为导航线索，不能进入证据抽取。
+
 ## 3. Fast Research Loop
 
 独立 LangGraph 位于 `research_harness/review_control.py`：
@@ -135,6 +140,10 @@ fingerprint；API key 从不进入 config、artifact 或 SQLite checkpoint。
 
 确定性校验要求：
 
+- Skim 中未经全文确认的数字会在进入 reasoning 前被移除；
+- 聚合镜像和来源身份未知的 Web 页面不能产生 EvidenceCard；
+- 静态官方 Web 页最多保留 5 张卡片，只能支持页面级作者陈述或文档事实，
+  不能代替 PDF 的定量实验结果；
 - 数字必须带实验条件；
 - locator 和 content hash 必须存在；
 - 报告不得引用未知 card ID；
@@ -158,8 +167,9 @@ Fast Loop 使用显式绑定，不存在智能 Skill Router：
 | reasoning/synthesis | `review-synthesize` |
 | promotion | `ingest-paper`，之后 `verify-evidence / wiki-link` |
 
-归一化、去重、漏斗、EvidenceCard schema、独立来源校验、技术地图、readiness、
-saturation 和 citation completeness 都由 Python 确定性实现。
+归一化、去重、来源权威性门槛、论文优先 Deep Read、Skim 数字清理、
+EvidenceCard schema、独立来源校验、技术地图、readiness、saturation 和 citation
+completeness 都由 Python 确定性实现。
 
 错误先写入本次运行的 `.harness/review-runs/<run-id>/state/errors.jsonl`。只有同一
 `recurrence_key` 在至少两个独立 run 中出现，才进入

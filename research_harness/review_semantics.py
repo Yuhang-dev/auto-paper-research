@@ -12,7 +12,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from .model_client import ReviewModelBundle, create_profile_chat_model
-from .review_logic import stable_id, validate_nonconsensus_assessment
+from .review_logic import (
+    sanitize_provisional_skim,
+    source_authority,
+    source_evidence_eligible,
+    stable_id,
+    validate_nonconsensus_assessment,
+)
 from .review_models import (
     EvidenceCard,
     EvidenceExtraction,
@@ -39,6 +45,32 @@ from .skill_registry import SkillRegistry, SkillSpec
 
 
 T = TypeVar("T", bound=BaseModel)
+MATERIAL_CARD_LIMITS = {
+    "pdf-text": 20,
+    "repository-readme": 8,
+    "web-content": 5,
+}
+
+
+def _locator_occurs_in_material(value: str, material: SourceMaterial) -> bool:
+    needle = " ".join(value.casefold().split())
+    haystack = " ".join(material.text.casefold().split())
+    return bool(needle and needle in haystack)
+
+
+def _web_card_supported(card: EvidenceCard, material: SourceMaterial) -> bool:
+    if material.media_type != "web-content":
+        return True
+    locator = card.locator
+    return not (
+        card.evidence_type == "experiment"
+        or card.value is not None
+        or locator.kind not in {"section", "url"}
+        or (
+            locator.kind == "section"
+            and not _locator_occurs_in_material(locator.value, material)
+        )
+    )
 
 
 class ReviewSemanticEngine(Protocol):
@@ -291,6 +323,8 @@ class LangChainReviewSemanticEngine:
                     {
                         "source_id": item.source_id,
                         "source_type": item.source_type,
+                        "canonical_url": item.canonical_url,
+                        "source_authority": source_authority(item),
                         "title": item.title,
                         "abstract": item.abstract,
                         "snippet": item.snippet,
@@ -335,6 +369,8 @@ class LangChainReviewSemanticEngine:
                 "source": {
                     "source_id": source.source_id,
                     "source_type": source.source_type,
+                    "canonical_url": source.canonical_url,
+                    "source_authority": source_authority(source),
                     "title": source.title,
                     "authors": source.authors,
                     "year": source.year,
@@ -358,12 +394,22 @@ class LangChainReviewSemanticEngine:
                 },
             },
         )
+        safe_findings, safe_questions = sanitize_provisional_skim(
+            result.key_findings,
+            result.questions_raised,
+        )
         return result.model_copy(
             update={
                 "source_id": source.source_id,
                 "source_type": source.source_type,
                 "provisional": True,
                 "citation_eligible": False,
+                "select_for_deep_read": (
+                    result.select_for_deep_read
+                    and source_evidence_eligible(source)
+                ),
+                "key_findings": safe_findings,
+                "questions_raised": safe_questions,
                 "basis": (
                     "source-excerpt"
                     if source.content_preview
@@ -425,8 +471,14 @@ class LangChainReviewSemanticEngine:
         material: SourceMaterial,
         claims: Sequence[UnderstandingClaim],
     ) -> EvidenceExtraction:
+        if not source_evidence_eligible(source):
+            raise ValueError(
+                "citation-ready evidence requires a primary paper, repository, "
+                "or deterministically recognized official Web source"
+            )
         skill_name = "project-audit" if source.source_type == "project" else "evidence-extract"
         skill = self.registry.get(skill_name)
+        maximum_cards = MATERIAL_CARD_LIMITS[material.media_type]
         result = _invoke_structured(
             self.reasoning_model,
             EvidenceExtraction,
@@ -460,7 +512,7 @@ class LangChainReviewSemanticEngine:
                     "one_material_result_per_card": True,
                     "numeric_results_require_conditions": True,
                     "locator_required": True,
-                    "maximum_cards": 20,
+                    "maximum_cards": maximum_cards,
                 },
             },
         )
@@ -468,8 +520,15 @@ class LangChainReviewSemanticEngine:
             raise ValueError("evidence extractor returned the wrong source_id")
         known_claims = {item.claim_id for item in claims}
         cards = []
+        omitted_cards = 0
         for item in result.cards:
             locator = item.locator
+            if material.media_type == "web-content":
+                # Static page extraction cannot establish table/figure results,
+                # and page-level author summaries are not experimental evidence.
+                if not _web_card_supported(item, material):
+                    omitted_cards += 1
+                    continue
             if locator.kind == "pdf-page":
                 if material.media_type != "pdf-text":
                     raise ValueError("pdf-page locator returned for a non-PDF source")
@@ -529,10 +588,19 @@ class LangChainReviewSemanticEngine:
                     }
                 )
             )
+        if len(cards) > maximum_cards:
+            omitted_cards += len(cards) - maximum_cards
+            cards = cards[:maximum_cards]
+        limitations = list(result.source_limitations)
+        if omitted_cards:
+            limitations.append(
+                f"Deterministic evidence guards omitted {omitted_cards} cards "
+                "that lacked an eligible material/locator combination."
+            )
         return EvidenceExtraction(
             source_id=source.source_id,
             cards=tuple(cards),
-            source_limitations=result.source_limitations,
+            source_limitations=tuple(dict.fromkeys(limitations)),
             unresolved_questions=result.unresolved_questions,
         )
 

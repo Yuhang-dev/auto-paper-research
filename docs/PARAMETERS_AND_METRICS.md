@@ -140,6 +140,7 @@ V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 
 | `max_sources` | I | 8 | 50 |
 | `max_skims` | I | 4 | 20 |
 | `max_deep_reads` | I | 2 | 10 |
+| `minimum_deep_read_papers` | I | 2 | 6 |
 | `max_promotions` | I | 0 | 6 |
 | paper / project / web soft quota | I | 5 / 1 / 2 | 30 / 10 / 10 |
 | `max_search_rounds` | I | 1 | 3 |
