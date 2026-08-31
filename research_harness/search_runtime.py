@@ -859,7 +859,8 @@ class SearchRuntime:
             for item in run.get("candidates") or []
             if isinstance(item, dict)
             and (item.get("relevance") or {}).get("label") is None
-            and item.get("review_state") not in {"ingested", "excluded"}
+            and item.get("review_state")
+            not in {"staged-for-wiki", "ingested", "excluded"}
         ]
         if not raw_candidates:
             return SearchScreeningResult(False, 0, 0, 0, 0)

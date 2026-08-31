@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 JsonScalar = Union[str, int, float, bool, None]
 IngestStatus = Literal["draft", "needs-review"]
-KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
+KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,119}$")
 
 
@@ -29,7 +29,7 @@ def _validate_key(value: str) -> str:
     clean = value.strip()
     if not KEY_PATTERN.fullmatch(clean):
         raise ValueError(
-            "local keys must start with a letter and use at most 32 letters, "
+            "local keys must start with a letter and use at most 64 letters, "
             "digits, underscores, or hyphens"
         )
     return clean
@@ -174,6 +174,7 @@ class ReusableEntityDraft(IngestModel):
 
 
 class MethodDraft(ReusableEntityDraft):
+    paper_role: Literal["proposed", "baseline", "prior-work"]
     definition: str
     sparsity: Optional[Dict[str, JsonScalar]] = None
     implementations: Tuple[str, ...] = ()
@@ -223,7 +224,13 @@ class ClaimDraft(IngestModel):
     evidence_type: Literal["author-stated", "experiment-supported", "inferred"]
     evidence_status: Literal["located", "partial", "unlocated"]
     evidence: Optional[EvidenceLocator] = None
-    scope: Dict[str, JsonScalar]
+    scope: Dict[str, JsonScalar] = Field(
+        min_length=1,
+        description=(
+            "Non-empty, source-supported conditions that bound the claim, such as "
+            "model, benchmark, context length, setting, or metric."
+        ),
+    )
     facets: Tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -269,6 +276,7 @@ class ResultDraft(IngestModel):
 class ExperimentDraft(IngestModel):
     key: str
     method_keys: Tuple[str, ...]
+    baseline_method_keys: Tuple[str, ...] = ()
     model_keys: Tuple[str, ...]
     benchmark_key: str
     context_length: int = Field(gt=0)
@@ -290,6 +298,7 @@ class ExperimentDraft(IngestModel):
             raise ValueError("experiment model_keys cannot be empty")
         for field_name in (
             "method_keys",
+            "baseline_method_keys",
             "model_keys",
             "supports_claim_keys",
             "contradicts_claim_keys",
@@ -298,6 +307,10 @@ class ExperimentDraft(IngestModel):
             _unique_text(values, field_name)
             for value in values:
                 _validate_key(value)
+        if set(self.method_keys) & set(self.baseline_method_keys):
+            raise ValueError(
+                "an experiment cannot use the same method as both evaluated and baseline"
+            )
         if set(self.supports_claim_keys) & set(self.contradicts_claim_keys):
             raise ValueError(
                 "an experiment cannot both support and contradict the same claim"
@@ -350,6 +363,10 @@ class PaperIngestDraft(IngestModel):
         for experiment in self.experiments:
             if not set(experiment.method_keys) <= keys["method"]:
                 raise ValueError("experiment references an unknown method key")
+            if not set(experiment.baseline_method_keys) <= keys["method"]:
+                raise ValueError(
+                    "experiment references an unknown baseline method key"
+                )
             if not set(experiment.model_keys) <= keys["model"]:
                 raise ValueError("experiment references an unknown model key")
             if experiment.benchmark_key not in keys["benchmark"]:
@@ -433,13 +450,26 @@ class PaperExcerpt(IngestModel):
 class PaperIngestResult(IngestModel):
     candidate_id: str
     paper_id: str
-    status: Literal["published", "preview", "no-change"]
+    status: Literal["staged", "published", "preview", "no-change"]
     created_entity_ids: Tuple[str, ...] = ()
     reused_entity_ids: Tuple[str, ...] = ()
     changed_paths: Tuple[str, ...] = ()
+    stage_id: Optional[str] = None
+    staged_path: Optional[str] = None
     diagnostic_codes: Tuple[str, ...] = ()
     semantic_artifact_ids: Tuple[str, ...] = ()
     pdf_pages: int = Field(ge=1)
     selected_pages: Tuple[int, ...]
     model_calls: int = Field(default=1, ge=1)
     schema_repair_applied: bool = False
+
+    @model_validator(mode="after")
+    def _validate_stage_fields(self) -> "PaperIngestResult":
+        if self.status == "staged":
+            if not self.stage_id or not self.staged_path:
+                raise ValueError("a staged ingest result requires stage_id and staged_path")
+            if self.changed_paths:
+                raise ValueError("staged ingestion cannot report Wiki changed_paths")
+        elif self.stage_id or self.staged_path:
+            raise ValueError("stage fields are valid only for staged ingestion")
+        return self

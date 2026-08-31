@@ -53,11 +53,16 @@ Structured relations:
 - `proposes` → method;
 - `reports` → experiment.
 
+Only `MethodDraft` records with `paper_role: proposed` produce `proposes` edges.
+Claims carry `source_paper`, which produces a structured paper→claim `states`
+edge.
+
 An experiment's `paper` field also creates the inverse paper→experiment edge.
 
 ### Method
 
-Required: `definition`. Optional: `sparsity`, `implementations`.
+Required: `definition`. Optional: `sparsity`, `implementations`. New method pages
+also preserve their extraction `evidence` locator for later verification.
 
 Do not store a new method as `concept(kind: method)`. That is legacy V0 behavior.
 
@@ -73,8 +78,10 @@ Required: `family`, `parameters`, and `source`.
 ### Claim
 
 Required: `statement`, `assessment`, and `scope`. New claims use
-`assessment: open`. Evidence attribution and extraction state belong in `scope`
-and the body. Lifecycle status is not epistemic assessment.
+`assessment: open`. Attribution, evidence type/status, evidence locator, and
+`source_paper` are separate top-level provenance fields; `scope` contains only
+the scientific conditions that bound the statement. Lifecycle status is not
+epistemic assessment.
 
 ### Experiment
 
@@ -82,6 +89,7 @@ Required:
 
 - `paper`;
 - `method`;
+- optional `baseline_method`;
 - `model`;
 - `benchmark`;
 - `context_length`;
@@ -91,7 +99,8 @@ Required:
 - `evidence`.
 
 `evidence.locator` must be reproducible. `relations.supports` and
-`relations.contradicts` point from experiments to claims.
+`relations.contradicts` point from experiments to claims. `baseline_method`
+creates `compares_against` edges and is not treated as a proposed method.
 
 ## Publication invariants
 

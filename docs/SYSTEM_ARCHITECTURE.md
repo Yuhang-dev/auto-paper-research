@@ -160,6 +160,7 @@ auto-paper-research/
 │   ├── search_runtime.py             Query planning 与候选筛选
 │   ├── paper_sources.py              受控 arXiv PDF 获取
 │   ├── evidence_verification.py      证据复核和状态晋升
+│   ├── evidence_revision.py          受限证据修订和复验交接
 │   ├── nonconsensus_analysis.py      Claim 条件对齐与 Assessment
 │   ├── skill_registry.py             Skill 注册表
 │   ├── tools.py                      LangChain Tool 封装
@@ -191,6 +192,7 @@ auto-paper-research/
 │   │   └── agents/                   Skill 元数据
 │   ├── ingest-paper/                 论文摄取与证据提取协议
 │   ├── verify-evidence/              来源复核与生命周期协议
+│   ├── revise-evidence/              矛盾与 locator 修订协议
 │   └── analyze-claims/               非共识比较协议
 │
 ├── wiki/                             领域知识真源
@@ -343,7 +345,7 @@ START
 - `DoneCriteria` / `DoneCheck`：完成条件与检查结果；
 - `ProgressMeasurement`：前后快照差异和加权 `progress_score`。
 
-`search`、`ingest`、`analyze_claims`、`expand_citations` 和 `verify` 必须指定
+`search`、`ingest`、`revise_evidence`、`analyze_claims`、`expand_citations` 和 `verify` 必须指定
 `target_gap_id`，避免产生没有研究目标的动作。
 
 `ingest_models.py` 进一步定义论文摄取边界：
@@ -388,7 +390,7 @@ Gap 路由规则：
 
 ### 6.10 `research_execution.py`：有限动作执行器
 
-`DeterministicActionExecutor` 不使用 LLM Router。当前显式支持四条路径。
+`DeterministicActionExecutor` 不使用 LLM Router。当前显式支持五条路径。
 
 `search`：
 
@@ -408,12 +410,14 @@ Gap 路由规则：
 1. 只选择 `review_state: selected-for-ingest` 的 candidate；
 2. 优先使用显式、安全的仓库相对 `local_pdf_path`；
 3. 对缺少本地源的 arXiv handoff，在网络获准后限制 host、大小、PDF header 和 D 盘目标目录获取；
-4. 调用 `PaperIngestPipeline`，不让模型直接写 Markdown；
+4. 调用 `PaperIngestPipeline`，不让模型直接写 Markdown；批量首轮可用 deferred 模式跳过 Wiki catalog 注入；
 5. 若 `PaperIngestDraft` 校验失败，仅以原输出做一次有界 schema repair；无效输出、字段级错误和 repair 结果写入非发布 semantic artifact；
 6. 将实际模型调用数、repair 状态、变更页面和实体数写入 `ResearchActionResult`；
-7. Wiki 发布成功后把 candidate 从 `selected-for-ingest` 关闭为 `ingested`，记录
-   canonical paper ID、时间、页面和 diagnostics；
-8. 重建 Snapshot，让 Outer Loop 只承认真源中实际出现的增量。
+7. deferred 模式先把经过 Schema 校验的草稿写入 content-addressed queue，并把
+   candidate 改为 `staged-for-wiki`，此时 Wiki source hash 必须不变；
+8. 独立 `publish-staged` 阶段才读取当前 Wiki、完成实体消歧、shadow validation 和原子发布；
+9. Wiki 发布成功后把 candidate 关闭为 `ingested`，记录 canonical paper ID、时间、页面和 diagnostics；
+10. 重建 Snapshot，让 Outer Loop 只承认真源中实际出现的增量。
 
 `verify`：
 
@@ -423,6 +427,15 @@ Gap 路由规则：
 4. 模型逐实体返回 `supported / contradicted / insufficient`；
 5. 只有语义结果和确定性 gate 同时通过的实体才变为 `verified`；
 6. assessment verification 还要求所有输入 claim/experiment 已 verified。
+
+`revise_evidence`：
+
+1. 只选择 `needs-review` 的 method/claim，且 verifier 必须已记录 source hash、页码、verdict 和 rationale；
+2. 只接受 `source-contradiction / locator-page-mismatch / invalid-locator`；
+3. locator 问题只能改 `evidence`，method 矛盾只能改 `definition/evidence`，claim 矛盾只能改 `statement/scope/evidence`；
+4. 模型只能引用本次提供的 PDF 页，runtime 再校验 entity、paper、reason、hash、页码和字段 allow-list；
+5. 发布时把旧 verification 写入 `revision_history`，状态固定回到 `draft`；
+6. 每个实体最多两轮修订，之后形成 blocking human-review gap；修订动作永远不能自行标记 verified。
 
 `analyze_claims`：
 
@@ -641,7 +654,17 @@ V1 不自动创建 concept；缺失的概念归一化需求进入 Open Questions
 - 只有确定性 gate 与语义 verdict 同时通过时才写入 `verified`，其余保留
   `needs-review` 并记录原因和验证 provenance。
 
-### 8.4 `analyze-claims`
+### 8.4 `revise-evidence`
+
+该 Skill 把 verifier 的失败反馈变成受限、可追溯的修订任务：
+
+- `revision-contract.md` 固定 identity、reason、source hash、source pages 和更新字段；
+- `validate_revision_draft.py` 可离线检查结构化修订提案；
+- locator 失败与 source contradiction 使用不同字段 allow-list；
+- prior verification 进入 `revision_history`，修订页面只能回到 `draft`；
+- 单实体最多两次自动修订，之后必须人工复核或引入新来源。
+
+### 8.5 `analyze-claims`
 
 该 Skill 把“寻找非共识”从数量目标改为可审核的比较任务：
 
@@ -653,7 +676,7 @@ V1 不自动创建 concept；缺失的概念归一化需求进入 Open Questions
 - 输出固定为 `needs-review / verified: false`，避免同一个分析步骤自我认证；
 - 稳定 fingerprint 阻止同一批证据产生重复 Assessment。
 
-### 8.5 LoopEngineer 反馈
+### 8.6 LoopEngineer 反馈
 
 循环优化不等于让 Agent 随时改写 Skill。正确链路是：
 
@@ -714,7 +737,8 @@ benchmark 和 model 实体。模型只负责语义抽取；程序负责路径约
 `insufficient-evidence` 是合法结论，系统不需要为了满足 Done 条件制造争议。
 
 `verify-evidence` 先做页码、数值、关系和状态预检，再让模型比较来源与记录；二者都通过才
-能晋升 verified。`analyze-claims` 只消费 verified inputs，生成的 assessment 固定为
+能晋升 verified。可修复的 `needs-review` 会进入 `revise-evidence`，修订后回到 `draft`
+并由下一次独立 verification pass 复核。`analyze-claims` 只消费 verified inputs，生成的 assessment 固定为
 `needs-review`，随后由独立 verification pass 复核，避免一次模型判断自证正确。
 
 ### 阶段 F：Gap 驱动循环

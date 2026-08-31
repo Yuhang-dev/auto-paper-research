@@ -54,6 +54,7 @@ from .ingest_models import (
 )
 from .model_client import create_chat_model
 from .skill_registry import SkillRegistry, SkillSpec
+from .staged_ingest import StagedPaperRecord, StagedPaperStore
 
 
 MAX_PDF_BYTES = 200 * 1024 * 1024
@@ -502,7 +503,16 @@ def _repair_messages(
                 "and broken local references. Do not add papers, methods, experiments, "
                 "claims, evidence, page numbers, measurements, or other facts absent from "
                 "the original output. Omit unsupported optional records instead of "
-                "inventing replacements. Keep candidate_id exactly equal to the supplied "
+                "inventing replacements. Every retained claim must have at least one "
+                "source-supported condition in scope. When a claim has an empty scope, "
+                "copy into scope only conditions already explicit in that claim, its "
+                "evidence, or a linked experiment; otherwise remove the claim. If a claim "
+                "is removed, also remove its key from every experiment's "
+                "supports_claim_keys and contradicts_claim_keys so no stale reference "
+                "remains. Preserve each method's paper_role. Keep evaluated method_keys "
+                "separate from baseline_method_keys and do not relabel a comparison "
+                "baseline as proposed. Never fill scope with unknown, null, a placeholder, "
+                "or an invented condition. Keep candidate_id exactly equal to the supplied "
                 "candidate ID. Return the complete corrected object and nothing else."
             )
         ),
@@ -547,7 +557,14 @@ class LangChainPaperDraftExtractor:
                 "metadata, values, page numbers, entities, or evidence. Use PDF viewer page "
                 "markers exactly as supplied. Reuse a catalog entity by setting existing_id; "
                 "otherwise propose a lowercase kebab-case slug. Every extracted experiment "
-                "must preserve one atomic result and all material conditions.\n\n"
+                "must preserve one atomic result and all material conditions. Every claim "
+                "scope must contain at least one source-supported condition, such as the "
+                "model, benchmark, context length, setting, or metric. Omit a claim when no "
+                "such condition can be supported; never use unknown, null, or a placeholder "
+                "merely to make scope non-empty. For every method, set paper_role to "
+                "proposed only when this paper presents it as a contribution; use baseline "
+                "or prior-work otherwise. Experiment method_keys are evaluated methods, "
+                "while baseline_method_keys are comparison methods.\n\n"
                 f"SKILL INSTRUCTIONS\n{skill.instructions}\n\n"
                 f"WIKI SCHEMA\n{schema_reference}\n\n"
                 f"EVIDENCE POLICY\n{evidence_policy}\n\n"
@@ -804,6 +821,17 @@ class WikiDraftCompiler:
                 destination[item.key] = entity_id
                 (reused if is_reused else created).append(entity_id)
 
+        proposed_method_ids = tuple(
+            method_ids[item.key]
+            for item in draft.methods
+            if item.paper_role == "proposed"
+        )
+        referenced_method_rows = tuple(
+            f"{_entity_link(method_ids[item.key])} — {item.paper_role}"
+            for item in draft.methods
+            if item.paper_role != "proposed"
+        )
+
         paper_slug = paper_id.split(":", 1)[1]
         claim_ids: Dict[str, str] = {}
         for claim in draft.claims:
@@ -825,6 +853,8 @@ class WikiDraftCompiler:
                     "metric": experiment.metric.name,
                     "value": experiment.result.value,
                     "benchmark": experiment.benchmark_key,
+                    "methods": experiment.method_keys,
+                    "baseline_methods": experiment.baseline_method_keys,
                 },
                 sort_keys=True,
                 ensure_ascii=False,
@@ -848,7 +878,7 @@ class WikiDraftCompiler:
                 facets=draft.paper.facets,
                 timestamp=timestamp,
                 relations={
-                    "proposes": tuple(method_ids.values()),
+                    "proposes": proposed_method_ids,
                     "reports": tuple(experiment_ids.values()),
                 },
             )
@@ -889,9 +919,13 @@ class WikiDraftCompiler:
 
 ## Structured entities
 
-### Methods
+### Proposed methods
 
-{_bullet_lines(_entity_link(entity_id) for entity_id in method_ids.values())}
+{_bullet_lines(_entity_link(entity_id) for entity_id in proposed_method_ids)}
+
+### Baseline and prior-work methods
+
+{_bullet_lines(referenced_method_rows)}
 
 ### Claims
 
@@ -941,6 +975,7 @@ class WikiDraftCompiler:
                     "definition": method.definition,
                     "sparsity": method.sparsity,
                     "implementations": list(method.implementations),
+                    "evidence": _locator_mapping(method.evidence),
                 }
             )
             body = f"""# {method.title}
@@ -985,6 +1020,7 @@ class WikiDraftCompiler:
                         if benchmark.source_url
                         else {"paper": paper_id}
                     ),
+                    "evidence": _locator_mapping(benchmark.evidence),
                 }
             )
             body = f"""# {benchmark.title}
@@ -1029,6 +1065,7 @@ class WikiDraftCompiler:
                         if model.source_url
                         else {"paper": paper_id}
                     ),
+                    "evidence": _locator_mapping(model.evidence),
                 }
             )
             body = f"""# {model.title}
@@ -1050,17 +1087,6 @@ class WikiDraftCompiler:
             entity_id = claim_ids[claim.key]
             if entity_id in existing:
                 continue
-            scope = dict(claim.scope)
-            scope.update(
-                {
-                    "attribution": claim.attribution,
-                    "evidence_type": claim.evidence_type,
-                    "evidence_status": claim.evidence_status,
-                }
-            )
-            if claim.evidence:
-                scope["evidence_locator"] = claim.evidence.render()
-                scope["evidence_pdf_page"] = claim.evidence.pdf_page
             metadata = _base_metadata(
                 entity_id=entity_id,
                 entity_type="claim",
@@ -1075,7 +1101,14 @@ class WikiDraftCompiler:
                 {
                     "statement": claim.statement,
                     "assessment": "open",
-                    "scope": scope,
+                    "scope": dict(claim.scope),
+                    "attribution": claim.attribution,
+                    "evidence_type": claim.evidence_type,
+                    "evidence_status": claim.evidence_status,
+                    "evidence": (
+                        _locator_mapping(claim.evidence) if claim.evidence else None
+                    ),
+                    "source_paper": paper_id,
                 }
             )
             evidence_text = (
@@ -1100,6 +1133,20 @@ class WikiDraftCompiler:
             )
 
         benchmark_titles = {item.key: item.title for item in draft.benchmarks}
+        method_titles = {item.key: item.title for item in draft.methods}
+        title_bases = {
+            experiment.key: (
+                f"{draft.paper.title}: "
+                f"{', '.join(method_titles[key] for key in experiment.method_keys)} "
+                f"on {benchmark_titles[experiment.benchmark_key]} at "
+                f"{experiment.context_length} tokens ({experiment.metric.name})"
+            )
+            for experiment in draft.experiments
+        }
+        title_counts = {
+            title: tuple(title_bases.values()).count(title)
+            for title in set(title_bases.values())
+        }
         for experiment in draft.experiments:
             entity_id = experiment_ids[experiment.key]
             if entity_id in existing:
@@ -1111,12 +1158,14 @@ class WikiDraftCompiler:
                 claim_ids[key] for key in experiment.contradicts_claim_keys
             )
             method_values = [method_ids[key] for key in experiment.method_keys]
+            baseline_method_values = [
+                method_ids[key] for key in experiment.baseline_method_keys
+            ]
             model_values = [model_ids[key] for key in experiment.model_keys]
             benchmark_id = benchmark_ids[experiment.benchmark_key]
-            title = (
-                f"{draft.paper.title}: {benchmark_titles[experiment.benchmark_key]} "
-                f"at {experiment.context_length} tokens"
-            )
+            title = title_bases[experiment.key]
+            if title_counts[title] > 1:
+                title = f"{title} [{experiment.key}]"
             metadata = _base_metadata(
                 entity_id=entity_id,
                 entity_type="experiment",
@@ -1134,6 +1183,7 @@ class WikiDraftCompiler:
                 {
                     "paper": paper_id,
                     "method": method_values,
+                    "baseline_method": baseline_method_values,
                     "model": model_values,
                     "benchmark": benchmark_id,
                     "context_length": experiment.context_length,
@@ -1149,6 +1199,7 @@ class WikiDraftCompiler:
 
 - Paper: {_entity_link(paper_id)}
 - Method: {', '.join(_entity_link(value) for value in method_values)}
+- Baseline method: {', '.join(_entity_link(value) for value in baseline_method_values) or 'not recorded'}
 - Model: {', '.join(_entity_link(value) for value in model_values)}
 - Benchmark: {_entity_link(benchmark_id)}
 - Context length: {experiment.context_length}
@@ -1195,6 +1246,7 @@ class PaperIngestPipeline:
         extractor: Optional[PaperDraftExtractor] = None,
         now: Optional[Callable[[], datetime]] = None,
         artifact_recorder: Optional[SemanticArtifactRecorder] = None,
+        stage_store: Optional[StagedPaperStore] = None,
     ):
         self.settings = settings
         self.registry = SkillRegistry(settings.skills_root)
@@ -1207,6 +1259,7 @@ class PaperIngestPipeline:
         )
         self.writer = WikiSourceWriter(settings.wiki_root, settings.wiki_meta_root)
         self.artifact_recorder = artifact_recorder
+        self.stage_store = stage_store
 
     @staticmethod
     def _default_extractor(settings: HarnessSettings) -> PaperDraftExtractor:
@@ -1275,15 +1328,27 @@ class PaperIngestPipeline:
         candidate: IngestCandidate,
         *,
         preview: bool = False,
+        defer_wiki: bool = False,
+        research_id: Optional[str] = None,
         artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> PaperIngestResult:
+        if preview and defer_wiki:
+            raise ValueError("preview and defer_wiki are mutually exclusive")
+        if defer_wiki and (self.stage_store is None or not research_id):
+            raise ValueError(
+                "Deferred Wiki ingestion requires a stage store and research_id"
+            )
         document = extract_pdf_document(
             self._source_path(candidate),
             self.settings.repository_root,
         )
         excerpt = select_paper_excerpt(document)
-        catalog = render_wiki_catalog(
-            build_index(self.settings.wiki_root, self.settings.wiki_meta_root)
+        catalog = (
+            "[]\n[Wiki lookup intentionally deferred until batch publication.]"
+            if defer_wiki
+            else render_wiki_catalog(
+                build_index(self.settings.wiki_root, self.settings.wiki_meta_root)
+            )
         )
         try:
             extracted = self.extractor.extract(
@@ -1337,6 +1402,45 @@ class PaperIngestPipeline:
             )
             artifact_ids.append(artifact.artifact_id)
             publication_artifact_ids.append(artifact.artifact_id)
+        if defer_wiki:
+            assert self.stage_store is not None
+            assert research_id is not None
+            staged, staged_path = self.stage_store.stage(
+                research_id=research_id,
+                candidate=candidate,
+                draft=draft,
+                pdf_sha256=document.sha256,
+                pdf_pages=len(document.pages),
+                selected_pages=excerpt.selected_pages,
+                model_calls=extraction.model_calls,
+                schema_repair_applied=extraction.schema_repair_applied,
+                semantic_artifact_ids=tuple(artifact_ids),
+                publication_artifact_ids=tuple(publication_artifact_ids),
+            )
+            return PaperIngestResult(
+                candidate_id=candidate.candidate_id,
+                paper_id=f"paper:{_slugify(draft.paper.title, fallback=_short_hash(draft.paper.title))}",
+                status="staged",
+                stage_id=staged.stage_id,
+                staged_path=staged_path,
+                diagnostic_codes=tuple(
+                    dict.fromkeys(
+                        (
+                            "wiki-publication-deferred",
+                            *(
+                                ("structured-output-schema-repaired",)
+                                if extraction.schema_repair_applied
+                                else ()
+                            ),
+                        )
+                    )
+                ),
+                semantic_artifact_ids=tuple(artifact_ids),
+                pdf_pages=len(document.pages),
+                selected_pages=excerpt.selected_pages,
+                model_calls=extraction.model_calls,
+                schema_repair_applied=extraction.schema_repair_applied,
+            )
         compiled = self.compiler.compile(draft)
         diagnostics: Tuple[Diagnostic, ...]
         changed_paths: Tuple[str, ...]
@@ -1386,4 +1490,81 @@ class PaperIngestPipeline:
             selected_pages=excerpt.selected_pages,
             model_calls=extraction.model_calls,
             schema_repair_applied=extraction.schema_repair_applied,
+        )
+
+
+class StagedWikiPublisher:
+    """Resolve, validate, and atomically publish a previously extracted draft."""
+
+    def __init__(
+        self,
+        settings: HarnessSettings,
+        store: StagedPaperStore,
+        *,
+        now: Optional[Callable[[], datetime]] = None,
+        artifact_recorder: Optional[SemanticArtifactRecorder] = None,
+    ):
+        self.settings = settings
+        self.store = store
+        self.compiler = WikiDraftCompiler(
+            settings.wiki_root,
+            settings.wiki_meta_root,
+            now=now,
+        )
+        self.writer = WikiSourceWriter(settings.wiki_root, settings.wiki_meta_root)
+        self.artifact_recorder = artifact_recorder
+
+    def publish(
+        self,
+        record: StagedPaperRecord,
+        *,
+        target_id: str,
+        preview: bool = False,
+        action_id: Optional[str] = None,
+    ) -> PaperIngestResult:
+        compiled = self.compiler.compile(record.draft)
+        if preview:
+            diagnostics = self.writer.validate(compiled.pages)
+            errors = tuple(item for item in diagnostics if item.severity == "ERROR")
+            if errors:
+                raise PaperIngestError(
+                    "Staged Wiki preview contains schema errors: "
+                    + ", ".join(item.code for item in errors)
+                )
+            changed_paths = tuple(compiled.pages)
+            status: Literal["published", "preview", "no-change"] = "preview"
+        else:
+            report = self.writer.publish(compiled.pages)
+            diagnostics = report.diagnostics
+            changed_paths = report.changed_paths
+            status = "published" if changed_paths else "no-change"
+            self.store.record_publication(
+                record,
+                target_id=target_id,
+                paper_id=compiled.paper_id,
+                changed_paths=changed_paths,
+            )
+            if self.artifact_recorder is not None:
+                self.artifact_recorder.link_publication(
+                    record.publication_artifact_ids,
+                    action_id=action_id or f"publish:{record.stage_id}",
+                    changed_sources=tuple(
+                        f"wiki/{path}" for path in changed_paths
+                    ),
+                )
+        return PaperIngestResult(
+            candidate_id=record.candidate.candidate_id,
+            paper_id=compiled.paper_id,
+            status=status,
+            created_entity_ids=compiled.created_entity_ids,
+            reused_entity_ids=compiled.reused_entity_ids,
+            changed_paths=changed_paths,
+            diagnostic_codes=tuple(
+                dict.fromkeys(item.code for item in diagnostics)
+            ),
+            semantic_artifact_ids=record.semantic_artifact_ids,
+            pdf_pages=record.pdf_pages,
+            selected_pages=record.selected_pages,
+            model_calls=record.model_calls,
+            schema_repair_applied=record.schema_repair_applied,
         )

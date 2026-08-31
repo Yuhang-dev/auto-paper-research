@@ -50,7 +50,8 @@ Before semantic judgment, require:
 - canonical IDs and resolvable relation targets;
 - required schema fields;
 - a repository-local PDF for paper verification;
-- in-range PDF page locators for quantitative experiments;
+- in-range PDF page locators for every evidence-bearing entity;
+- inclusion of every cited locator page in the supplied page-aware excerpt;
 - preserved model, benchmark, context, metric, result, and sparsity conditions;
 - verified source claims and experiments for assessment verification.
 
@@ -76,8 +77,19 @@ benchmark is insufficient.
 A claim may become `verified` only when:
 
 - its statement is supported;
-- at least one structured evidence edge resolves to a verified experiment; and
 - author attribution is not confused with current-agent inference.
+
+Then apply the evidence-type-specific gate:
+
+- `experiment-supported` and `inferred` claims require at least one structured
+  support/contradiction edge to a verified experiment;
+- `author-stated` claims may use direct source evidence only when attribution is
+  `author`, evidence status is `located`, the exact locator page was inspected,
+  a structured paper→claim `states` edge exists, and claim assessment is
+  `supported`.
+
+Direct-source promotion never substitutes for an experiment edge on a
+quantitative `experiment-supported` claim.
 
 Do not mark a scientifically plausible claim verified merely because it sounds
 consistent with the paper.
@@ -104,6 +116,8 @@ not write Markdown or choose file paths.
   the mismatch.
 - Material condition omitted: retain `needs-review`.
 - Source conflict: record `contradicted`; do not silently rewrite the record.
+- An actionable method/claim contradiction or locator defect may be handed to
+  `revise-evidence`; the verifier itself still must not rewrite it.
 - Assessment with unverified inputs: do not mark the assessment verified.
 - Existing verified entity: do not downgrade it during an unrelated pass.
 
@@ -112,7 +126,9 @@ not write Markdown or choose file paths.
 - [ ] Every promoted entity has a source-backed verdict.
 - [ ] Quantitative values retain their experimental conditions.
 - [ ] PDF viewer page numbers are in range.
-- [ ] Claim evidence edges resolve to verified experiments.
+- [ ] Every cited locator page was supplied to and inspected by the verifier.
+- [ ] Experiment-supported claim edges resolve to verified experiments.
+- [ ] Direct author claims satisfy the source-paper and locator gates.
 - [ ] Non-consensus judgments compare aligned conditions.
 - [ ] Failed or insufficient checks remain visible as `needs-review`.
 - [ ] No source file or credential was placed in model output.

@@ -26,6 +26,7 @@ from research_harness.paper_ingest import (
     PaperIngestError,
     PaperIngestPipeline,
     PaperIngestStructuredOutputError,
+    StagedWikiPublisher,
     extract_pdf_document,
     select_paper_excerpt,
 )
@@ -33,6 +34,7 @@ from research_harness.research_control import AutonomousResearchController
 from research_harness.research_evaluation import inspect_research
 from research_harness.research_execution import DeterministicActionExecutor
 from research_harness.research_models import ResearchDecision, ResearchGap
+from research_harness.staged_ingest import StagedPaperStore
 from tools.wiki.indexer import build_index
 from tools.wiki.validator import validate_index
 from tools.wiki.writer import WikiSourceWriter, WikiWriteError
@@ -73,6 +75,7 @@ def paper_draft(candidate_id: str = "arxiv:2309.12307") -> PaperIngestDraft:
             "methods": [
                 {
                     "key": "s2",
+                    "paper_role": "proposed",
                     "proposed_slug": "shifted-sparse-attention",
                     "title": "Shifted Sparse Attention",
                     "aliases": ["S2-Attn"],
@@ -259,6 +262,12 @@ class PaperIngestPipelineTests(unittest.TestCase):
         output["paper"]["status"] = "verified"
         return output
 
+    @staticmethod
+    def empty_claim_scope_output() -> dict:
+        output = paper_draft().model_dump(mode="json")
+        output["claims"][0]["scope"] = {}
+        return output
+
     def test_real_pdf_extraction_preserves_page_markers(self) -> None:
         document = extract_pdf_document(LONG_LORA_PDF, REPOSITORY_ROOT)
         excerpt = select_paper_excerpt(document, max_pages=12, max_chars=50_000)
@@ -272,6 +281,33 @@ class PaperIngestPipelineTests(unittest.TestCase):
         payload = paper_draft().model_dump(mode="json")
         payload["experiments"][0]["method_keys"] = ["missing"]
         with self.assertRaisesRegex(ValidationError, "unknown method"):
+            PaperIngestDraft.model_validate(payload)
+
+    def test_local_keys_allow_descriptive_values_up_to_64_characters(self) -> None:
+        payload = paper_draft().model_dump(mode="json")
+        long_key = "claim-" + "x" * 58
+        self.assertEqual(64, len(long_key))
+        payload["claims"][0]["key"] = long_key
+        payload["experiments"][0]["supports_claim_keys"] = [long_key]
+        parsed = PaperIngestDraft.model_validate(payload)
+        self.assertEqual(long_key, parsed.claims[0].key)
+
+        payload["claims"][0]["key"] = long_key + "x"
+        payload["experiments"][0]["supports_claim_keys"] = [long_key + "x"]
+        with self.assertRaisesRegex(ValidationError, "at most 64"):
+            PaperIngestDraft.model_validate(payload)
+
+    def test_claim_scope_minimum_is_visible_in_json_schema(self) -> None:
+        schema = PaperIngestDraft.model_json_schema()
+        scope_schema = schema["$defs"]["ClaimDraft"]["properties"]["scope"]
+        self.assertEqual(1, scope_schema["minProperties"])
+        with self.assertRaisesRegex(ValidationError, "at least 1 item"):
+            PaperIngestDraft.model_validate(self.empty_claim_scope_output())
+
+    def test_draft_rejects_stale_claim_reference_after_claim_removal(self) -> None:
+        payload = paper_draft().model_dump(mode="json")
+        payload["claims"] = []
+        with self.assertRaisesRegex(ValidationError, "unknown claim"):
             PaperIngestDraft.model_validate(payload)
 
     def test_pipeline_publishes_valid_v02_entities_and_is_idempotent(self) -> None:
@@ -298,6 +334,23 @@ class PaperIngestPipelineTests(unittest.TestCase):
         )
         self.assertEqual(6, experiment.metadata["evidence"]["pdf_page"])
         self.assertIn("Table 2", experiment.metadata["evidence"]["locator"])
+        for entity_type in {"method", "benchmark", "model", "claim"}:
+            entity = next(
+                item for item in generated if item.entity_type == entity_type
+            )
+            self.assertIsInstance(entity.metadata.get("evidence"), dict)
+        claim = next(item for item in generated if item.entity_type == "claim")
+        self.assertEqual("paper:longlora", claim.metadata["source_paper"])
+        self.assertEqual("experiment-supported", claim.metadata["evidence_type"])
+        self.assertNotIn("evidence_type", claim.metadata["scope"])
+        self.assertTrue(
+            any(
+                edge.source == "paper:longlora"
+                and edge.target == claim.entity_id
+                and edge.relation == "states"
+                for edge in index.edges
+            )
+        )
 
         second = pipeline.ingest(self.candidate)
         self.assertEqual("no-change", second.status)
@@ -308,6 +361,152 @@ class PaperIngestPipelineTests(unittest.TestCase):
                 build_index(self.wiki_root, self.wiki_root / "_meta").unique_entities()
             ),
         )
+
+    def test_deferred_ingest_stages_before_separate_wiki_publication(self) -> None:
+        extractor = StaticExtractor(paper_draft())
+        store = StagedPaperStore(REPOSITORY_ROOT, self.root / "staged")
+        pipeline = PaperIngestPipeline(
+            self.settings,
+            extractor=extractor,
+            stage_store=store,
+            now=lambda: datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc),
+        )
+        before = build_index(self.wiki_root, self.wiki_root / "_meta").source_hash
+        staged = pipeline.ingest(
+            self.candidate,
+            defer_wiki=True,
+            research_id="long-context-sparse-models",
+        )
+        self.assertEqual("staged", staged.status)
+        self.assertEqual(before, build_index(self.wiki_root, self.wiki_root / "_meta").source_hash)
+        self.assertEqual(1, len(extractor.calls))
+
+        record = store.load_id(
+            "long-context-sparse-models",
+            str(staged.stage_id),
+        )
+        published = StagedWikiPublisher(self.settings, store).publish(
+            record,
+            target_id="test-wiki",
+        )
+        self.assertIn(published.status, {"published", "no-change"})
+        self.assertEqual(1, len(extractor.calls))
+        self.assertTrue(store.load_id(record.research_id, record.stage_id).published_to("test-wiki"))
+
+    def test_method_roles_and_experiment_titles_are_compiled_without_ambiguity(
+        self,
+    ) -> None:
+        base = paper_draft("arxiv:9999.00002")
+        paper = base.paper.model_copy(
+            update={
+                "title": "Role-Aware Sparse Attention",
+                "identifiers": base.paper.identifiers.model_copy(
+                    update={"arxiv": "9999.00002"}
+                ),
+            }
+        )
+        proposed_a = base.methods[0].model_copy(
+            update={
+                "key": "proposed_a",
+                "paper_role": "proposed",
+                "title": "Role Sparse A",
+                "aliases": (),
+                "proposed_slug": "role-sparse-a",
+            }
+        )
+        proposed_b = base.methods[0].model_copy(
+            update={
+                "key": "proposed_b",
+                "paper_role": "proposed",
+                "title": "Role Sparse B",
+                "aliases": (),
+                "proposed_slug": "role-sparse-b",
+            }
+        )
+        baseline = base.methods[0].model_copy(
+            update={
+                "key": "baseline",
+                "paper_role": "baseline",
+                "title": "Role Baseline",
+                "aliases": (),
+                "proposed_slug": "role-baseline",
+            }
+        )
+        experiment_a = base.experiments[0].model_copy(
+            update={
+                "key": "e_a",
+                "method_keys": ("proposed_a",),
+                "baseline_method_keys": ("baseline",),
+                "supports_claim_keys": (),
+            }
+        )
+        experiment_b = base.experiments[0].model_copy(
+            update={
+                "key": "e_b",
+                "method_keys": ("proposed_b",),
+                "baseline_method_keys": ("baseline",),
+                "supports_claim_keys": (),
+            }
+        )
+        draft = PaperIngestDraft.model_validate(
+            base.model_copy(
+                update={
+                    "paper": paper,
+                    "methods": (proposed_a, proposed_b, baseline),
+                    "claims": (),
+                    "experiments": (experiment_a, experiment_b),
+                }
+            ).model_dump(mode="json")
+        )
+        candidate = self.candidate.model_copy(
+            update={
+                "candidate_id": "arxiv:9999.00002",
+                "source_id": "9999.00002",
+                "title": paper.title,
+            }
+        )
+
+        result = self.pipeline(StaticExtractor(draft)).ingest(candidate)
+        index = build_index(self.wiki_root, self.wiki_root / "_meta")
+        paper_entity = index.unique_entities()[result.paper_id]
+        self.assertEqual(
+            {"method:role-sparse-a", "method:role-sparse-b"},
+            set(paper_entity.metadata["relations"]["proposes"]),
+        )
+        self.assertNotIn(
+            "method:role-baseline", paper_entity.metadata["relations"]["proposes"]
+        )
+        experiments = [
+            entity
+            for entity in index.unique_entities().values()
+            if entity.entity_type == "experiment"
+            and entity.metadata.get("paper") == result.paper_id
+        ]
+        self.assertEqual(2, len(experiments))
+        self.assertEqual(2, len({entity.title for entity in experiments}))
+        self.assertTrue(
+            all(
+                entity.metadata["baseline_method"] == ["method:role-baseline"]
+                for entity in experiments
+            )
+        )
+        self.assertEqual(
+            2,
+            sum(
+                edge.relation == "compares_against"
+                and edge.target == "method:role-baseline"
+                for edge in index.edges
+            ),
+        )
+        errors = [item for item in validate_index(index) if item.severity == "ERROR"]
+        ambiguous = [
+            item
+            for item in validate_index(index)
+            if item.code == "ambiguous_alias"
+            and item.entity_id in {entity.entity_id for entity in experiments}
+        ]
+        self.assertEqual([], errors)
+        self.assertEqual([], ambiguous)
 
     def test_new_paper_can_publish_as_needs_review(self) -> None:
         draft = paper_draft("arxiv:9999.00001")
@@ -407,6 +606,36 @@ class PaperIngestPipelineTests(unittest.TestCase):
             invalid_artifact["validation"]["details"]["errors"][0]["loc"],
         )
         self.assertEqual([], records[invalid_id]["publications"])
+
+    def test_empty_claim_scope_repair_omits_claim_and_cleans_references(self) -> None:
+        invalid = self.empty_claim_scope_output()
+        repaired = paper_draft().model_dump(mode="json")
+        repaired["claims"] = []
+        repaired["experiments"][0]["supports_claim_keys"] = []
+        model = ScriptedStructuredModel(
+            [
+                OutputParserException(
+                    "structured output validation failed",
+                    llm_output=json.dumps(invalid),
+                ),
+                repaired,
+            ]
+        )
+        pipeline = self.pipeline(LangChainPaperDraftExtractor(model))
+
+        result = pipeline.ingest(self.candidate)
+
+        self.assertEqual(2, result.model_calls)
+        self.assertTrue(result.schema_repair_applied)
+        self.assertIn("structured-output-schema-repaired", result.diagnostic_codes)
+        self.assertEqual(2, len(model.calls))
+        repair_system = model.calls[1][0].content
+        repair_human = model.calls[1][1].content
+        self.assertIn("When a claim has an empty scope", repair_system)
+        self.assertIn("supports_claim_keys", repair_system)
+        self.assertIn("invented condition", repair_system)
+        self.assertIn('"minProperties": 1', repair_human)
+        self.assertIn('"scope": {}', repair_human)
 
     def test_failed_repair_preserves_both_outputs_without_wiki_mutation(self) -> None:
         invalid = self.invalid_status_output()

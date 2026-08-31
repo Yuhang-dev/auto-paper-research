@@ -45,6 +45,7 @@ REVIEW_STATES = {
     "metadata-only",
     "abstract-screened",
     "selected-for-ingest",
+    "staged-for-wiki",
     "ingested",
     "excluded",
     "needs-review",
@@ -585,6 +586,37 @@ def _validate_candidates(
                 f"{path}.exclusion_reason",
                 "Excluded candidate needs a reason.",
             )
+        if review_state == "staged-for-wiki":
+            staged = candidate.get("staged_ingest")
+            if not isinstance(staged, Mapping):
+                _issue(
+                    issues,
+                    "error",
+                    f"{path}.staged_ingest",
+                    "A staged candidate requires a staged_ingest mapping.",
+                )
+            else:
+                if not str(staged.get("stage_id") or "").startswith("paper-stage-"):
+                    _issue(
+                        issues,
+                        "error",
+                        f"{path}.staged_ingest.stage_id",
+                        "Expected a paper-stage- ID.",
+                    )
+                if not staged.get("staged_path"):
+                    _issue(
+                        issues,
+                        "error",
+                        f"{path}.staged_ingest.staged_path",
+                        "A repository-relative staged path is required.",
+                    )
+                if not staged.get("staged_at"):
+                    _issue(
+                        issues,
+                        "error",
+                        f"{path}.staged_ingest.staged_at",
+                        "Staging timestamp is required.",
+                    )
         if review_state == "ingested":
             ingest = candidate.get("ingest")
             if not isinstance(ingest, Mapping):

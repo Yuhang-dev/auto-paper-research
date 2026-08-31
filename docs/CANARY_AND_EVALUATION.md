@@ -37,6 +37,10 @@ search action
           ↓
      verification
           ↓
+   optional revision
+          ↓
+    reverification
+          ↓
        analysis
 ```
 
@@ -90,7 +94,8 @@ D:\anaconda3\python.exe -B -m research_harness `
 ```
 
 只有前两步的 report、raw result、semantic artifact 和人工抽查正常后，才逐步改为
-`ingest`、`verification`、`analysis`。对应 `max_actions` 至少为 2、3、4。
+`ingest`、`verification`、`revision`、`reverification`、`analysis`。对应
+`max_actions` 至少为 2、3、4、5、6。
 
 第三步只摄取一篇论文，并给首次完整 PDF 抽取和一次可能的 schema repair 留出明确
 deadline：
@@ -115,6 +120,29 @@ D:\anaconda3\python.exe -B -m research_harness `
 `900` 秒是 Canary 进程的硬上限，不是期望耗时；schema 首次成功时不会发生第二次
 模型调用。失败报告中的 `semantic_artifact_ids` 可直接定位原始无效输出和字段错误。
 
+验证阶段出现可操作的 method/claim 矛盾或 locator 缺陷后，可用新 run 一次测试
+修订与独立复验：
+
+```powershell
+$runId = "reverification-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+D:\anaconda3\python.exe -B -m research_harness `
+  research canary long-context-sparse-models `
+  --run-id $runId `
+  --allow-network `
+  --stop-after reverification `
+  --max-planned-queries 1 `
+  --max-provider-query-calls 1 `
+  --max-new-unique-candidates 5 `
+  --max-papers-ingested 1 `
+  --max-actions 5 `
+  --deadline-seconds 1800 `
+  --provider-max-retries 0 `
+  --format json
+```
+
+若 initial verification 没有产生符合条件的反馈，`revision` 和 `reverification` 会
+作为“无候选”边界安全跳过，不额外调用模型；这仍是通过结果。
+
 ## 硬边界
 
 - `max_provider_query_calls` 统计 `Reader.search` 调用，不宣称限制 SDK 内部 HTTP；
@@ -136,6 +164,8 @@ D:\anaconda3\python.exe -B -m research_harness `
 | screening | 所有输入 candidate 恰好返回一次；无越界 ID；抽查 false promotion |
 | ingest | PDF hash/页码存在；语义制品先于 Wiki 编译；schema 无 ERROR；若结构化输出失败，报告精确字段路径且无效输出以 `schema_valid: false` 留存；最多一次 repair |
 | verification | source locator、数值和条件 gate 生效；unsupported 不会升 verified |
+| revision | 只改 reason/type allow-list；旧 verification 进入 revision_history；状态回到 draft |
+| reverification | 由独立 verify 调用决定是否晋升；revision 本身不能标记 verified |
 | analysis | 不强制 contested；条件不齐时允许 insufficient-evidence；结果仍 needs-review |
 
 `report.json` 中所有 invariants 应为 true。运行结果为 `blocked` 时，首先看
@@ -153,3 +183,51 @@ D:\anaconda3\python.exe -B -m research_harness `
 
 标注通过 `target_id + source_sha256` 绑定被审核对象。评估时用当前 source hash 调用
 `annotation_freshness()`；hash 不同即为 `stale`，不能继续计入校准指标。
+
+## 延迟 Wiki 的批量调研
+
+`--defer-wiki` 将首轮限制为检索、筛选、PDF 读取和结构化草稿入队。该阶段不读取
+Wiki catalog 做实体匹配，也不写任何 Wiki Markdown。`max_papers_ingested` 在这种模式
+下表示本轮最多暂存多少篇论文。
+
+```powershell
+$runId = "batch-stage-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+D:\anaconda3\envs\paper-harness\python.exe -B -m research_harness `
+  research canary long-context-sparse-models `
+  --run-id $runId `
+  --allow-network `
+  --stop-after ingest `
+  --defer-wiki `
+  --max-planned-queries 8 `
+  --max-provider-query-calls 8 `
+  --max-new-unique-candidates 40 `
+  --max-selected-candidates 8 `
+  --max-papers-ingested 5 `
+  --max-actions 6 `
+  --deadline-seconds 3600 `
+  --provider-max-retries 0 `
+  --format json
+```
+
+先在隔离 Wiki 中做零模型调用的编译预览和正式发布：
+
+```powershell
+D:\anaconda3\envs\paper-harness\python.exe -B -m research_harness `
+  research publish-staged long-context-sparse-models `
+  --run-id $runId --target canary --preview --format json
+
+D:\anaconda3\envs\paper-harness\python.exe -B -m research_harness `
+  research publish-staged long-context-sparse-models `
+  --run-id $runId --target canary --format json
+```
+
+人工抽查隔离 Wiki 后，只有显式指定 `--target formal` 才会更新正式 Wiki：
+
+```powershell
+D:\anaconda3\envs\paper-harness\python.exe -B -m research_harness `
+  research publish-staged long-context-sparse-models `
+  --run-id $runId --target formal --format json
+```
+
+发布阶段从 content-addressed staged draft 重新执行实体消歧、Schema 校验和原子事务，
+不会重新读取 PDF，也不会调用 LLM。

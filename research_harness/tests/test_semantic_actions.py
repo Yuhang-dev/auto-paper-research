@@ -9,6 +9,7 @@ import yaml
 
 from research_harness.config import HarnessSettings, REPOSITORY_ROOT
 from research_harness.evidence_verification import EvidenceVerificationResult
+from research_harness.evidence_revision import EvidenceRevisionResult
 from research_harness.ingest_models import IngestCandidate, PaperIngestResult
 from research_harness.nonconsensus_analysis import NonConsensusAnalysisResult
 from research_harness.paper_ingest import (
@@ -49,6 +50,22 @@ class FakeAnalysisPipeline:
             result="insufficient-evidence",
             changed_paths=("assessments/fixture.md",),
             diagnostic_codes=(),
+            model_calls=1,
+        )
+
+
+class FakeRevisionPipeline:
+    requires_network = False
+
+    def revise_next(self, *, gap, snapshot):
+        del gap, snapshot
+        return EvidenceRevisionResult(
+            target_id="method:fixture",
+            paper_id="paper:fixture",
+            reason_code="source-contradiction",
+            status="published",
+            updated_fields=("definition",),
+            changed_paths=("methods/fixture.md",),
             model_calls=1,
         )
 
@@ -136,20 +153,26 @@ class SemanticActionExecutorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_executor_routes_verify_and_analyze_claims(self) -> None:
+    def test_executor_routes_revision_verify_and_analyze_claims(self) -> None:
         executor = DeterministicActionExecutor(
             self.settings,
             verification_pipeline=FakeVerificationPipeline(),
+            revision_pipeline=FakeRevisionPipeline(),
             claim_analysis_pipeline=FakeAnalysisPipeline(),
         )
         self.assertIn("verify", executor.supported_actions)
+        self.assertIn("revise_evidence", executor.supported_actions)
         self.assertIn("analyze_claims", executor.supported_actions)
         snapshot = inspect_research(self.settings, "long-context-sparse-models")
-        for action in ("verify", "analyze_claims"):
+        for action in ("revise_evidence", "verify", "analyze_claims"):
             gap = ResearchGap(
                 id=f"gap-{action}",
                 key=f"test-{action}",
-                type="evidence_gap" if action == "verify" else "contradiction_gap",
+                type=(
+                    "evidence_gap"
+                    if action in {"revise_evidence", "verify"}
+                    else "contradiction_gap"
+                ),
                 question=f"Execute {action}?",
                 priority=0.9,
                 reasons=("test",),

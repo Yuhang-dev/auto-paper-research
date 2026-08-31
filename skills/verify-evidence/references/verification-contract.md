@@ -30,7 +30,10 @@ The runtime rejects or withholds promotion when:
 - a supplied ID is omitted;
 - a page number is outside the local PDF;
 - a quantitative experiment lacks a precise locator;
-- a claim has no structured support/contradiction edge;
+- an evidence-bearing record's cited page was not supplied or inspected;
+- an experiment-supported claim has no structured support/contradiction edge;
+- an author-stated direct claim lacks located evidence or a structured
+  source-paper edge;
 - an assessment cites an unresolved or unverified input;
 - the proposed page set introduces a Wiki validation error.
 
@@ -49,7 +52,10 @@ verification:
   source_sha256: "<PDF SHA-256>"
   pdf_pages: [7]
   rationale: "<bounded explanation>"
+  gate_codes: []
 ```
 
 For an unresolved check, lifecycle status remains `needs-review` and the same
-mapping records the reason.
+mapping records the reason. `gate_codes` is a deterministic list used by the
+controller; examples include `evidence-locator-invalid`,
+`locator-page-absent`, and `locator-page-not-inspected`.

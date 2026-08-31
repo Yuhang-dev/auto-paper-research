@@ -26,8 +26,10 @@ Before extracting:
 1. Read `references/wiki-schema.md`.
 2. Read `references/evidence-policy.md`.
 3. Read `references/ingest-draft-schema.md`.
-4. Consult the existing Wiki catalog supplied by the harness before proposing a
-   reusable entity.
+4. In immediate mode, consult the Wiki catalog supplied by the harness. In
+   deferred mode, leave `existing_id` empty and propose conservative canonical
+   names; the later publication pass performs identity resolution against the
+   current Wiki.
 
 Assets document the target page shapes. The deterministic writer, rather than the
 model, applies them.
@@ -71,6 +73,15 @@ For each method, benchmark, and model:
 3. otherwise provide a stable local key and lowercase kebab-case `proposed_slug`;
 4. attach a page-aware evidence locator.
 
+For every method, also record its role in this paper:
+
+- `proposed`: introduced or materially proposed by this paper;
+- `baseline`: used as a comparison baseline;
+- `prior-work`: discussed or reused but not proposed here.
+
+Do not label a baseline as `proposed` merely because it appears in the method or
+experiment sections.
+
 Do not create two local keys for aliases of the same entity. This V1 path does not
 create concept pages; record a missing concept-normalization need as an open
 question for a later Wiki-link workflow.
@@ -85,13 +96,18 @@ Separate:
 
 Record attribution, evidence type, evidence status, scope, and locator separately.
 Never present agent inference as an author claim. An `experiment-supported` claim
-must be referenced by at least one experiment.
+must be referenced by at least one experiment. Every retained claim must have a
+non-empty scope containing at least one source-supported condition, such as model,
+benchmark, context length, setting, or metric. Omit a claim when no such condition
+can be supported; never use `unknown`, `null`, or a placeholder only to satisfy the
+schema.
 
 ### 5. Extract experiments
 
 Represent one material result per experiment record. Preserve:
 
 - method, model, and benchmark local keys;
+- separate evaluated `method_keys` from comparison `baseline_method_keys`;
 - context length;
 - sparsity target, pattern, ratio, or budget when reported;
 - metric name, direction, and unit;
@@ -124,6 +140,10 @@ may make exactly one repair attempt. During that repair:
   keys, and broken local references;
 - omit an unsupported optional entity, claim, or experiment instead of creating
   replacement evidence;
+- when a claim has an empty scope, move only conditions already explicit in that
+  claim, its evidence, or a linked experiment into `scope`; otherwise omit the
+  claim and remove its key from every experiment's `supports_claim_keys` and
+  `contradicts_claim_keys`;
 - keep `candidate_id` unchanged;
 - do not add facts, identifiers, measurements, locators, or page numbers.
 
@@ -131,9 +151,14 @@ If the repaired output is also invalid, stop. The harness must retain both
 invalid outputs and their field-level validation errors as non-published
 semantic artifacts. It must not compile or publish any Wiki page from them.
 
-### 9. Deterministic publication
+### 9. Stage or publish deterministically
 
-The harness will:
+The default research-batch path first stores the validated `PaperIngestDraft` in
+the content-addressed staging queue and changes the candidate to
+`staged-for-wiki`. This first pass must not read the Wiki catalog for entity
+lookup and must not write Markdown.
+
+A later explicit publication pass will:
 
 1. resolve or allocate canonical IDs;
 2. reuse existing typed entities;
@@ -177,8 +202,12 @@ Wiki page to `verified` or a claim assessment to `supported`, `contested`, or
 - [ ] Metadata is present or explicitly unknown.
 - [ ] Existing typed entities were checked before proposing new ones.
 - [ ] Every reusable entity has an evidence locator.
+- [ ] Only methods actually proposed by the paper use `paper_role: proposed`.
+- [ ] Baseline methods are separated from evaluated methods in each experiment.
 - [ ] Every quantitative result preserves its conditions and locator.
 - [ ] Every experiment-supported claim is linked from an experiment.
+- [ ] Every retained claim has a non-empty, source-supported scope.
+- [ ] Removed claims leave no experiment references behind.
 - [ ] Agent analysis is not attributed to the paper.
 - [ ] No unsupported result, page number, identifier, or link was invented.
 - [ ] Output follows the structured draft and Wiki V0.2 contracts.
@@ -187,6 +216,7 @@ Wiki page to `verified` or a claim assessment to `supported`, `contested`, or
 
 ## Output
 
-One validated `PaperIngestDraft`. Publication may create zero or one paper page
-and zero or more method, benchmark, model, claim, and experiment pages. Existing
+One validated `PaperIngestDraft`. Deferred execution first returns one staged
+record and no Wiki pages. Later publication may create zero or one paper page and
+zero or more method, benchmark, model, claim, and experiment pages. Existing
 entities may be reused. Do not create unrelated pages.

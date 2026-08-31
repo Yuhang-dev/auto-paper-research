@@ -22,6 +22,13 @@ relations:
       - method
     inverse: used_by_experiment
 
+  compares_against:
+    source_types:
+      - experiment
+    target_types:
+      - method
+    inverse: compared_by_experiment
+
   uses_model:
     source_types:
       - experiment
@@ -42,6 +49,13 @@ relations:
     target_types:
       - claim
     inverse: supported_by
+
+  states:
+    source_types:
+      - paper
+    target_types:
+      - claim
+    inverse: stated_by
 
   contradicts:
     source_types:

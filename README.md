@@ -75,6 +75,7 @@ inspect → evaluate → check_done
               ├─ search ─────────→ plan / DeepXiv / screen
               ├─ ingest ─────────→ acquire PDF / extract / publish draft
               ├─ verify ─────────→ source checks / guarded promotion
+              ├─ revise_evidence → bounded correction / reset to draft
               └─ analyze_claims ─→ needs-review assessment
                      ▼
                   inspect
@@ -86,7 +87,7 @@ inspect → evaluate → check_done
 ```
 
 系统不使用 LLM Router。Outer Loop 只在显式 action table 中选择 `search / ingest /
-verify / analyze_claims`；每个动作再加载对应 Skill。模型负责 query 语义规划、候选
+verify / revise_evidence / analyze_claims`；每个动作再加载对应 Skill。模型负责 query 语义规划、候选
 筛选、论文结构化抽取、证据语义比较和 claim 条件对齐；程序负责 ID、路径、下载边界、
 页码和数值预检、schema、状态迁移、原子发布与回滚。网络未授权或凭证/前置条件缺失时，
 图会返回结构化 `ActionResult` 并安全停止。
@@ -141,13 +142,15 @@ frontmatter、路径穿越和逃逸 Skill 根目录的资源。
 当前边界刻意保持简单：
 
 ```text
-已实现：SkillRegistry + 按需资源读取 + search/ingest/verify/analyze_claims 显式 executor
+已实现：SkillRegistry + 按需资源读取 + search/ingest/verify/revise_evidence/analyze_claims 显式 executor
 未实现：LLM Skill Router / 通用 SkillExecutor / citation expansion / synthesis subgraph
 ```
 
 Registry 本身仍只负责发现和检查。Outer Loop 使用显式 action table：`search`
 绑定 query planning、DeepXiv 和候选筛选；`ingest` 绑定受控 PDF 交接和
 `PaperIngestPipeline`；`verify` 绑定来源复核与 guarded lifecycle transition；
+`revise_evidence` 只处理 verifier 已定位的事实矛盾或 locator 缺陷，最多两轮，修订后退回
+`draft` 并等待独立复验；
 `analyze_claims` 只消费 verified evidence 并创建待独立复核的 assessment。没有通用
 Skill 解释器，也不会让模型自行选择任意脚本。
 
@@ -362,7 +365,7 @@ local_pdf_path: sources/papers/arxiv-<id>.pdf
 
 也可以人工放置 PDF 并设置该路径。自动下载只支持显式选中的 arXiv candidate，并限制
 HTTPS host、文件类型、目标目录和最大字节数。远程 query planning、screening、ingest、
-verify 与 analyze_claims 均受同一次 `--allow-network` 授权；未配置模型时语义动作不会
+verify、revise_evidence 与 analyze_claims 均受同一次 `--allow-network` 授权；未配置模型时语义动作不会
 进入 executor capability set。发布完成后 Harness 会把 candidate 改为 `ingested` 并
 记录 canonical paper ID，避免下一轮重复处理同一 handoff。
 
@@ -385,7 +388,11 @@ research question
   -> shadow Wiki validation
   -> draft paper/method/benchmark/model/claim/experiment pages
   -> verify-evidence
-  -> verified source records
+       ├─ verified source records
+       └─ actionable needs-review feedback
+            -> revise-evidence (only for contradiction/locator defects)
+            -> draft corrected record
+            -> independent verify-evidence
   -> analyze-claims
   -> needs-review non-consensus assessment
   -> independent verify-evidence
@@ -400,6 +407,7 @@ research question
 - `skills/search-paper/`：检索规划、DeepXiv 发现、候选集、coverage 与 gap；
 - `skills/ingest-paper/`：把选中的论文转换为结构化 Wiki 页面；
 - `skills/verify-evidence/`：来源、locator、实验条件和生命周期复核；
+- `skills/revise-evidence/`：对 verifier 指定的 method/claim 做最多两轮受限修订；
 - `skills/analyze-claims/`：比较 verified claims，生成共识/争议/证据不足 assessment。
 
 `ingest-paper` 已迁移到 Wiki V0.2，并通过严格 Pydantic Draft、页级 locator、typed
@@ -543,3 +551,11 @@ D:\anaconda3\python.exe -B -m unittest discover `
 - 可复用脚本或函数。
 
 Skill 不因一次异常结果自动改写自身。
+
+## Deferred Wiki batch
+
+较大规模的首轮调研使用 `research canary ... --defer-wiki`：先检索、筛选并把多篇
+论文保存为结构化 staged drafts，Wiki 保持不变。随后用
+`research publish-staged ... --target canary` 在隔离 Wiki 验收；确认后再显式使用
+`--target formal`。完整 PowerShell 命令见
+`docs/CANARY_AND_EVALUATION.md` 的“延迟 Wiki 的批量调研”。

@@ -9,6 +9,7 @@ created_at: "{{iso_timestamp}}"
 updated_at: "{{iso_timestamp}}"
 paper: "paper:{{paper_slug}}"
 method: []
+baseline_method: []
 model: []
 benchmark: "benchmark:{{benchmark_slug}}"
 context_length: 0

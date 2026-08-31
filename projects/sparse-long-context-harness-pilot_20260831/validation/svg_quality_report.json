@@ -1,0 +1,1385 @@
+{
+  "schema": "ppt-master.svg-quality-report.v1",
+  "stage": "final",
+  "target": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831",
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "digest": "9ab1c9ec4112ad48de37c20b170861004e38f97a172855afe51fafdbf80e0881",
+    "file_count": 16,
+    "files": [
+      {
+        "file": "01_cover.svg",
+        "sha256": "b7bd3c4e8e6ab2b50a5d480b7d3c73e728a4c5fdadad345648c039ea81a9c655"
+      },
+      {
+        "file": "02_three_findings.svg",
+        "sha256": "708cb3c5ec8f61583f342629384ff6335ec5fd91a74b5328e6720f5169b3b23d"
+      },
+      {
+        "file": "03_technical_tracks.svg",
+        "sha256": "e6164cc3e7faef90390a4091a11b4f279f07305c2b94e2b7d11882b6004a4453"
+      },
+      {
+        "file": "04_method_map.svg",
+        "sha256": "6ec7591130d2931c84c74df53c6429b684970ca6f9904c7b80b1d43598a8dc9c"
+      },
+      {
+        "file": "05_topology_variables.svg",
+        "sha256": "c3d588e46658732c062eb060ad1f4906b81d520c369a817e8a42ea7b10c6feb4"
+      },
+      {
+        "file": "06_ppl_result.svg",
+        "sha256": "00a1a37bbfeab02743841c5744d3d5a2a6f349099b7b72fc096f1535323a923f"
+      },
+      {
+        "file": "07_nonconsensus_boundary.svg",
+        "sha256": "fbaf7643a5005204d9709f32adff830940c84baf4cedcd89dc7d828274783bfc"
+      },
+      {
+        "file": "08_metric_map.svg",
+        "sha256": "5e25e71d3ea3dcaa8f6114ee21cf3680654e58321053618cc255a3095ee644e1"
+      },
+      {
+        "file": "09_engineering_bottleneck.svg",
+        "sha256": "cea071891ebf9b9c53758de95c79617af92484b38df571dcf2ca3e2629400ba2"
+      },
+      {
+        "file": "10_opensource_audit.svg",
+        "sha256": "093bf1edcc412a2e045419a893c8f38b76ab0b9fc275f0b6b937734f6706f81f"
+      },
+      {
+        "file": "11_harness_architecture.svg",
+        "sha256": "3a00e38362771878f7165906c961d5e947f17e153f91bc5cb0785df3f562469d"
+      },
+      {
+        "file": "12_skill_script_llm.svg",
+        "sha256": "9efb9663911d241a32a187e6c791465304964848956d225740b9eb6eb077ad6e"
+      },
+      {
+        "file": "13_loopengineer.svg",
+        "sha256": "0cfa1fbb58fd58e3395a6941a5600fee81e189614eadff6be624cf4ee4fbf35a"
+      },
+      {
+        "file": "14_canary.svg",
+        "sha256": "9b2a81fde2624764ea96be234e26f05edd30670b2bc55c9a5b50d1eb41a5bb52"
+      },
+      {
+        "file": "15_error_book.svg",
+        "sha256": "d85c1edb61e1a6a2c078ee42a3cc7439ac4c482bd63305c7da8658bf445822f5"
+      },
+      {
+        "file": "16_next_loop.svg",
+        "sha256": "61ba51caf68f567581f9dc47f2f4d8a612304803737787cab90cc08119e94db7"
+      }
+    ]
+  },
+  "summary": {
+    "total": 16,
+    "passed": 0,
+    "warnings": 16,
+    "errors": 0
+  },
+  "issue_types": {},
+  "categories": {
+    "blocking": {
+      "count": 0,
+      "issues": []
+    },
+    "introduced": {
+      "count": 25,
+      "issues": [
+        {
+          "file": "01_cover.svg",
+          "message": "Noncanonical compact authoring: Authoring SVG contains noncanonical or redundant inherited style declarations (15 change(s)); examples: cover-title:font-family None -> 'Microsoft YaHei, Georgia, serif'; cover-title:font-weight None -> '700'; cover-title:text-anchor None -> 'start' (advisory; normalize with `python3 scripts/compact_svg_styles.py <svg_output> --inplace` and rerun the final gate, or leave the explicit form)"
+        },
+        {
+          "file": "01_cover.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "02_three_findings.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "02_three_findings.svg",
+          "message": "Detected 4 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-02\"> x=64.0, y=122.0..166.0, 2 lines; <g id=\"judgment-cards\"> x=92.0, y=342.0..398.0, 3 lines; <g id=\"judgment-cards\"> x=466.0, y=342.0..398.0, 3 lines; +1 more). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+        },
+        {
+          "file": "03_technical_tracks.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "03_technical_tracks.svg",
+          "message": "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-03\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+        },
+        {
+          "file": "04_method_map.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "05_topology_variables.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "05_topology_variables.svg",
+          "message": "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-05\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+        },
+        {
+          "file": "06_ppl_result.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "06_ppl_result.svg",
+          "message": "<text> (x=64, y=224; text='PG19 perplexity · 越低…') exceeds <g id=\"ppl-bars\"> data-pptx-bounds on the vertical axis: content (64.0, 208.7)-(316.0, 230.3), container (64.0, 220.0)-(1088.0, 634.0), overflow horizontal 0.0%, vertical 2.7%; expand the root module bounds into available non-overlapping space; otherwise reflow the text"
+        },
+        {
+          "file": "07_nonconsensus_boundary.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "08_metric_map.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "09_engineering_bottleneck.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "09_engineering_bottleneck.svg",
+          "message": "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-09\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+        },
+        {
+          "file": "10_opensource_audit.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "10_opensource_audit.svg",
+          "message": "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-10\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+        },
+        {
+          "file": "11_harness_architecture.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "12_skill_script_llm.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "13_loopengineer.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "13_loopengineer.svg",
+          "message": "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-13\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+        },
+        {
+          "file": "14_canary.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "15_error_book.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "16_next_loop.svg",
+          "message": "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+        },
+        {
+          "file": "16_next_loop.svg",
+          "message": "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-16\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+        }
+      ]
+    },
+    "inherited": {
+      "count": 0,
+      "issues": []
+    },
+    "source-import": {
+      "count": 0,
+      "summary": {
+        "warning_count": 0,
+        "by_code": {}
+      }
+    }
+  },
+  "drift": {
+    "colors": {
+      "#A7D8F2": [
+        "04_method_map.svg",
+        "06_ppl_result.svg",
+        "09_engineering_bottleneck.svg",
+        "11_harness_architecture.svg",
+        "14_canary.svg"
+      ],
+      "#F2A079": [
+        "01_cover.svg"
+      ],
+      "#FFFFFF": [
+        "01_cover.svg",
+        "02_three_findings.svg",
+        "03_technical_tracks.svg",
+        "04_method_map.svg",
+        "05_topology_variables.svg",
+        "06_ppl_result.svg",
+        "07_nonconsensus_boundary.svg",
+        "08_metric_map.svg",
+        "09_engineering_bottleneck.svg",
+        "10_opensource_audit.svg",
+        "11_harness_architecture.svg",
+        "12_skill_script_llm.svg",
+        "13_loopengineer.svg",
+        "14_canary.svg",
+        "15_error_book.svg",
+        "16_next_loop.svg"
+      ]
+    },
+    "fonts": {},
+    "sizes": {
+      "116": [
+        "14_canary.svg"
+      ],
+      "27": [
+        "11_harness_architecture.svg"
+      ],
+      "35": [
+        "10_opensource_audit.svg"
+      ]
+    }
+  },
+  "carrier_receipt": {
+    "scope": "informational-not-a-quota",
+    "pages": 16,
+    "totals": {
+      "text_elements": 316,
+      "image_placements": 0,
+      "icons": 0,
+      "svg_geometry_elements": 1032,
+      "preset_shapes": 0,
+      "page_frame_elements": 755,
+      "marker_uses": 0,
+      "inline_emphasis_runs": 0,
+      "gradient_uses": 0,
+      "filter_uses": 0,
+      "text_effects": 0
+    },
+    "pages_with": {
+      "images": 0,
+      "icons": 0,
+      "presets": 0,
+      "charts": 0,
+      "tables": 0,
+      "formulas": 0,
+      "inline_emphasis_runs": 0,
+      "gradient_uses": 0,
+      "filter_uses": 0,
+      "text_effects": 0
+    },
+    "geometry_elements": {
+      "circle": 789,
+      "ellipse": 0,
+      "line": 60,
+      "path": 0,
+      "polygon": 0,
+      "polyline": 0,
+      "rect": 183
+    },
+    "preset_names": {},
+    "native_objects": {
+      "chart": 0,
+      "formula_block": 0,
+      "formula_inline": 0,
+      "other": 0,
+      "table": 0
+    },
+    "image_page_max_frame_share_range": []
+  },
+  "project_issues": {
+    "template": [],
+    "animation": [],
+    "illustration": [],
+    "communication_trace": [],
+    "pptx_structure": []
+  },
+  "files": [
+    {
+      "file": "01_cover.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\01_cover.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Noncanonical compact authoring: Authoring SVG contains noncanonical or redundant inherited style declarations (15 change(s)); examples: cover-title:font-family None -> 'Microsoft YaHei, Georgia, serif'; cover-title:font-weight None -> '700'; cover-title:text-anchor None -> 'start' (advisory; normalize with `python3 scripts/compact_svg_styles.py <svg_output> --inplace` and rerun the final gate, or leave the explicit form)",
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 10,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 7,
+              "circle": 98,
+              "ellipse": 0,
+              "line": 1,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 100,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 10,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#F2A079",
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "b7bd3c4e8e6ab2b50a5d480b7d3c73e728a4c5fdadad345648c039ea81a9c655"
+    },
+    {
+      "file": "02_three_findings.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\02_three_findings.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif",
+        "Detected 4 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-02\"> x=64.0, y=122.0..166.0, 2 lines; <g id=\"judgment-cards\"> x=92.0, y=342.0..398.0, 3 lines; <g id=\"judgment-cards\"> x=466.0, y=342.0..398.0, 3 lines; +1 more). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 20,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 13,
+              "circle": 46,
+              "ellipse": 0,
+              "line": 1,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 47,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 20,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "708cb3c5ec8f61583f342629384ff6335ec5fd91a74b5328e6720f5169b3b23d"
+    },
+    {
+      "file": "03_technical_tracks.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\03_technical_tracks.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif",
+        "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-03\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 29,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 15,
+              "circle": 42,
+              "ellipse": 0,
+              "line": 1,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 29,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "e6164cc3e7faef90390a4091a11b4f279f07305c2b94e2b7d11882b6004a4453"
+    },
+    {
+      "file": "04_method_map.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\04_method_map.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 17,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 10,
+              "circle": 50,
+              "ellipse": 0,
+              "line": 6,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 17,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#A7D8F2",
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "6ec7591130d2931c84c74df53c6429b684970ca6f9904c7b80b1d43598a8dc9c"
+    },
+    {
+      "file": "05_topology_variables.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\05_topology_variables.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif",
+        "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-05\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 18,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 10,
+              "circle": 48,
+              "ellipse": 0,
+              "line": 6,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 47,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 18,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "c3d588e46658732c062eb060ad1f4906b81d520c369a817e8a42ea7b10c6feb4"
+    },
+    {
+      "file": "06_ppl_result.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\06_ppl_result.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif",
+        "<text> (x=64, y=224; text='PG19 perplexity · 越低…') exceeds <g id=\"ppl-bars\"> data-pptx-bounds on the vertical axis: content (64.0, 208.7)-(316.0, 230.3), container (64.0, 220.0)-(1088.0, 634.0), overflow horizontal 0.0%, vertical 2.7%; expand the root module bounds into available non-overlapping space; otherwise reflow the text"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 21,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 16,
+              "circle": 42,
+              "ellipse": 0,
+              "line": 1,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 21,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#A7D8F2",
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "00a1a37bbfeab02743841c5744d3d5a2a6f349099b7b72fc096f1535323a923f"
+    },
+    {
+      "file": "07_nonconsensus_boundary.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\07_nonconsensus_boundary.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 16,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 11,
+              "circle": 44,
+              "ellipse": 0,
+              "line": 5,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 16,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "fbaf7643a5005204d9709f32adff830940c84baf4cedcd89dc7d828274783bfc"
+    },
+    {
+      "file": "08_metric_map.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\08_metric_map.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 16,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 13,
+              "circle": 46,
+              "ellipse": 0,
+              "line": 1,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 47,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 16,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "5e25e71d3ea3dcaa8f6114ee21cf3680654e58321053618cc255a3095ee644e1"
+    },
+    {
+      "file": "09_engineering_bottleneck.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\09_engineering_bottleneck.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif",
+        "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-09\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 20,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 13,
+              "circle": 46,
+              "ellipse": 0,
+              "line": 5,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 20,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#A7D8F2",
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "cea071891ebf9b9c53758de95c79617af92484b38df571dcf2ca3e2629400ba2"
+    },
+    {
+      "file": "10_opensource_audit.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\10_opensource_audit.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif",
+        "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-10\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 20,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 4,
+              "circle": 48,
+              "ellipse": 0,
+              "line": 7,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 20,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        },
+        "sparse_typography_sizes": {
+          "35": 1
+        }
+      },
+      "passed": true,
+      "source_sha256": "093bf1edcc412a2e045419a893c8f38b76ab0b9fc275f0b6b937734f6706f81f"
+    },
+    {
+      "file": "11_harness_architecture.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\11_harness_architecture.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 14,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 11,
+              "circle": 46,
+              "ellipse": 0,
+              "line": 7,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 47,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 14,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#A7D8F2",
+            "#FFFFFF"
+          ]
+        },
+        "sparse_typography_sizes": {
+          "27": 1
+        }
+      },
+      "passed": true,
+      "source_sha256": "3a00e38362771878f7165906c961d5e947f17e153f91bc5cb0785df3f562469d"
+    },
+    {
+      "file": "12_skill_script_llm.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\12_skill_script_llm.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 23,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 10,
+              "circle": 54,
+              "ellipse": 0,
+              "line": 1,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 23,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "9efb9663911d241a32a187e6c791465304964848956d225740b9eb6eb077ad6e"
+    },
+    {
+      "file": "13_loopengineer.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\13_loopengineer.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif",
+        "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-13\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 18,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 9,
+              "circle": 44,
+              "ellipse": 0,
+              "line": 6,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 18,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "0cfa1fbb58fd58e3395a6941a5600fee81e189614eadff6be624cf4ee4fbf35a"
+    },
+    {
+      "file": "14_canary.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\14_canary.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 23,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 13,
+              "circle": 46,
+              "ellipse": 0,
+              "line": 4,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 47,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 23,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#A7D8F2",
+            "#FFFFFF"
+          ]
+        },
+        "sparse_typography_sizes": {
+          "116": 1
+        }
+      },
+      "passed": true,
+      "source_sha256": "9b2a81fde2624764ea96be234e26f05edd30670b2bc55c9a5b50d1eb41a5bb52"
+    },
+    {
+      "file": "15_error_book.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\15_error_book.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif"
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 27,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 12,
+              "circle": 47,
+              "ellipse": 0,
+              "line": 5,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 27,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "d85c1edb61e1a6a2c078ee42a3cc7439ac4c482bd63305c7da8658bf445822f5"
+    },
+    {
+      "file": "16_next_loop.svg",
+      "path": "D:\\wiki-papersearch\\projects\\sparse-long-context-harness-pilot_20260831\\svg_output\\16_next_loop.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [
+        "Font stack exports non-PPT-safe typeface(s) to PPTX (latin=Aptos): Microsoft YaHei, Aptos, Arial, sans-serif",
+        "Detected 1 paragraph-like line run(s) split across sibling <text> elements (<g id=\"header-16\"> x=64.0, y=122.0..166.0, 2 lines). If each run is one prose paragraph, combine it into one <text>: keep its first line as direct text and use direct <tspan> children with the parent x and positive relative dy values for later lines. An all-<tspan> form may start with dy=\"0\". Keep semantically independent text frames separate."
+      ],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 24,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 0,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 16,
+              "circle": 42,
+              "ellipse": 0,
+              "line": 3,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 0,
+            "preset_names": {},
+            "page_frame_elements": 42,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei, Aptos, Arial, sans-serif",
+          "Microsoft YaHei, Georgia, serif"
+        ],
+        "text_elements": 24,
+        "tspan_elements": 0,
+        "contextual_values": {
+          "colors": [
+            "#FFFFFF"
+          ]
+        }
+      },
+      "passed": true,
+      "source_sha256": "61ba51caf68f567581f9dc47f2f4d8a612304803737787cab90cc08119e94db7"
+    }
+  ]
+}

@@ -267,6 +267,50 @@ class WikiEngineFailureModeTests(unittest.TestCase):
             self.assertIn("verified_claim_insufficient_evidence", errors)
             self.assertIn("claim_lacks_evidence", warnings)
 
+    def test_verified_author_stated_claim_accepts_located_direct_evidence(
+        self,
+    ) -> None:
+        temporary, wiki_root = self.temporary_fixture()
+        with temporary:
+            experiment = wiki_root / "experiments" / "alpha-ruler-32k.md"
+            experiment.write_text(
+                experiment.read_text(encoding="utf-8").replace(
+                    "relations:\n  supports:\n    - claim:quality-preserved",
+                    "relations: {}",
+                ),
+                encoding="utf-8",
+            )
+            claim = wiki_root / "claims" / "quality-preserved.md"
+            text = claim.read_text(encoding="utf-8")
+            claim.write_text(
+                text.replace(
+                    "assessment: supported\n",
+                    "assessment: supported\n"
+                    "attribution: author\n"
+                    "evidence_type: author-stated\n"
+                    "evidence_status: located\n"
+                    "evidence:\n"
+                    "  locator: Section 4, PDF p. 6\n"
+                    "  pdf_page: 6\n"
+                    "source_paper: paper:alpha\n",
+                ),
+                encoding="utf-8",
+            )
+            index = build_index(wiki_root, META_ROOT)
+            errors = diagnostic_codes(index, "ERROR")
+            warnings = diagnostic_codes(index, "WARNING")
+            self.assertNotIn("verified_claim_insufficient_evidence", errors)
+            self.assertNotIn("verified_claim_missing_direct_evidence", errors)
+            self.assertNotIn("claim_lacks_evidence", warnings)
+            self.assertTrue(
+                any(
+                    edge.source == "paper:alpha"
+                    and edge.target == "claim:quality-preserved"
+                    and edge.relation == "states"
+                    for edge in index.edges
+                )
+            )
+
     def test_verified_experiment_requires_precise_evidence_locator(self) -> None:
         temporary, wiki_root = self.temporary_fixture()
         with temporary:

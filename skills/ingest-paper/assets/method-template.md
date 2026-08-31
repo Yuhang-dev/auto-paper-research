@@ -10,6 +10,9 @@ updated_at: "{{iso_timestamp}}"
 definition: "{{definition}}"
 sparsity: null
 implementations: []
+evidence:
+  locator: "{{evidence_locator}}"
+  pdf_page: 0
 relations: {}
 ---
 

@@ -1,6 +1,9 @@
 __pycache__/
 *.py[cod]
 *.log
+svg_quality_report.txt
+~$*.pptx
+projects/**/svg_final/
 *.pem
 *.key
 credentials*.json

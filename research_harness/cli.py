@@ -25,6 +25,7 @@ from .canary_models import CanaryLimits, CanaryRunReport
 from .config import HarnessSettings
 from .graph import ResearchHarness
 from .memory import list_notes, recall_notes
+from .paper_ingest import StagedWikiPublisher
 from .persistence import HarnessPersistence
 from .research_control import AutonomousResearchController, ResearchController
 from .research_evaluation import (
@@ -36,6 +37,7 @@ from .research_evaluation import (
     resolve_research_directory,
 )
 from .skill_registry import RESOURCE_GROUPS, SkillRegistry, SkillSpec
+from .staged_ingest import StagedPaperRecord, StagedPaperStore
 from .trajectory import (
     ensure_annotation_sidecar,
     export_checkpoint_trajectory,
@@ -209,17 +211,61 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     research_canary.add_argument(
         "--stop-after",
-        choices=("retrieval", "screening", "ingest", "verification", "analysis"),
+        choices=(
+            "retrieval",
+            "screening",
+            "ingest",
+            "verification",
+            "revision",
+            "reverification",
+            "analysis",
+        ),
         default="screening",
     )
     research_canary.add_argument("--max-planned-queries", type=int, default=1)
     research_canary.add_argument("--max-provider-query-calls", type=int, default=1)
     research_canary.add_argument("--max-new-unique-candidates", type=int, default=5)
+    research_canary.add_argument("--max-selected-candidates", type=int, default=3)
     research_canary.add_argument("--max-papers-ingested", type=int, default=1)
     research_canary.add_argument("--max-actions", type=int, default=3)
     research_canary.add_argument("--deadline-seconds", type=int, default=300)
     research_canary.add_argument("--provider-max-retries", type=int, default=0)
+    research_canary.add_argument(
+        "--defer-wiki",
+        action="store_true",
+        help=(
+            "Stage validated paper drafts without Wiki lookup or publication. "
+            "Use research publish-staged in a separate pass."
+        ),
+    )
     _add_format(research_canary)
+
+    research_publish_staged = research_commands.add_parser(
+        "publish-staged",
+        help="Publish deferred paper drafts without another model call.",
+    )
+    research_publish_staged.add_argument("research_id")
+    research_publish_staged.add_argument(
+        "--run-id",
+        required=True,
+        help="Canary run that owns the staged draft queue.",
+    )
+    research_publish_staged.add_argument(
+        "--target",
+        choices=("canary", "formal"),
+        default="canary",
+        help=(
+            "Publish into the isolated Canary Wiki by default; formal explicitly "
+            "updates the repository Wiki source of truth."
+        ),
+    )
+    research_publish_staged.add_argument("--max-papers", type=int, default=20)
+    research_publish_staged.add_argument(
+        "--preview",
+        action="store_true",
+        help="Compile and validate pages without writing the Wiki or staging queue.",
+    )
+    _add_format(research_publish_staged)
 
     research_export = research_commands.add_parser(
         "export-trajectory",
@@ -647,10 +693,12 @@ def _run_research_canary(
         max_planned_queries=args.max_planned_queries,
         max_provider_query_calls=args.max_provider_query_calls,
         max_new_unique_candidates=args.max_new_unique_candidates,
+        max_selected_candidates=args.max_selected_candidates,
         max_papers_ingested=args.max_papers_ingested,
         max_actions=args.max_actions,
         deadline_seconds=args.deadline_seconds,
         provider_max_retries=args.provider_max_retries,
+        wiki_write_mode="deferred" if args.defer_wiki else "immediate",
         stop_after=args.stop_after,
     )
     run_id = args.run_id or (
@@ -763,9 +811,191 @@ def _run_research_canary(
     )
 
 
+def _canary_publish_settings(
+    settings: HarnessSettings,
+    canary_root: Path,
+    *,
+    target: str,
+) -> HarnessSettings:
+    if target == "formal":
+        return settings
+    workspace = canary_root / "workspace"
+    isolated = HarnessSettings(
+        repository_root=settings.repository_root,
+        wiki_root=workspace / "wiki",
+        wiki_meta_root=workspace / "wiki" / "_meta",
+        skills_root=settings.skills_root,
+        research_root=workspace / "research",
+        database_path=canary_root / "publish-staged.sqlite3",
+        model=None,
+        model_base_url=None,
+        workspace_id=f"canary-publish:{canary_root.name}",
+        context_token_budget=settings.context_token_budget,
+        max_tool_iterations=settings.max_tool_iterations,
+        tool_output_chars=settings.tool_output_chars,
+    )
+    isolated.validate()
+    return isolated
+
+
+def _mark_staged_candidate_published(
+    settings: HarnessSettings,
+    record: StagedPaperRecord,
+    *,
+    result: Any,
+) -> Optional[str]:
+    path = (settings.repository_root / record.candidate.search_run_path).resolve()
+    try:
+        path.relative_to(settings.repository_root.resolve())
+    except ValueError:
+        return None
+    if not path.is_file():
+        return None
+    payload = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        return None
+    matched = next(
+        (
+            item
+            for item in payload.get("candidates") or []
+            if isinstance(item, dict)
+            and item.get("candidate_id") == record.candidate.candidate_id
+        ),
+        None,
+    )
+    if not isinstance(matched, dict) or matched.get("review_state") not in {
+        "staged-for-wiki",
+        "ingested",
+    }:
+        return None
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    matched["review_state"] = "ingested"
+    matched["ingest"] = {
+        "paper_id": result.paper_id,
+        "status": result.status,
+        "ingested_at": timestamp,
+        "wiki_paths": [f"wiki/{item}" for item in result.changed_paths],
+        "diagnostic_codes": list(result.diagnostic_codes),
+        "stage_id": record.stage_id,
+    }
+    header = payload.get("run")
+    if isinstance(header, dict):
+        header["updated_at"] = timestamp
+    rendered = yaml.safe_dump(
+        payload,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+    temporary: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            delete=False,
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        ) as handle:
+            handle.write(rendered)
+            temporary = Path(handle.name)
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+    return path.relative_to(settings.repository_root).as_posix()
+
+
+def _run_publish_staged(
+    settings: HarnessSettings,
+    args: argparse.Namespace,
+) -> int:
+    if args.max_papers < 1 or args.max_papers > 100:
+        raise ValueError("--max-papers must be between 1 and 100")
+    canary_root = settings.repository_root / ".harness" / "canary" / args.run_id
+    if not canary_root.is_dir():
+        raise FileNotFoundError(f"Canary run not found: {canary_root}")
+    store = StagedPaperStore(
+        settings.repository_root,
+        canary_root / "artifacts" / "staged",
+    )
+    target_id = (
+        f"canary:{args.run_id}"
+        if args.target == "canary"
+        else f"formal:{args.research_id}"
+    )
+    target_settings = _canary_publish_settings(
+        settings,
+        canary_root,
+        target=args.target,
+    )
+    recorder = None
+    manifest = canary_root / "artifacts" / "semantic-manifest.json"
+    if manifest.is_file():
+        from .artifacts import SemanticArtifactRecorder
+
+        recorder = SemanticArtifactRecorder(
+            settings.repository_root,
+            canary_root / "artifacts",
+        )
+    publisher = StagedWikiPublisher(
+        target_settings,
+        store,
+        artifact_recorder=recorder,
+    )
+    records = store.pending(args.research_id, target_id=target_id)[: args.max_papers]
+    results = []
+    for position, record in enumerate(records, start=1):
+        result = publisher.publish(
+            record,
+            target_id=target_id,
+            preview=args.preview,
+            action_id=f"publish-staged-{position:04d}",
+        )
+        handoff = None
+        if not args.preview:
+            handoff = _mark_staged_candidate_published(
+                settings,
+                record,
+                result=result,
+            )
+        results.append(
+            {
+                "stage_id": record.stage_id,
+                "candidate_id": record.candidate.candidate_id,
+                "paper_id": result.paper_id,
+                "status": result.status,
+                "entities_created": len(result.created_entity_ids),
+                "entities_reused": len(result.reused_entity_ids),
+                "wiki_paths": [f"wiki/{item}" for item in result.changed_paths],
+                "candidate_handoff": handoff,
+                "model_calls": 0,
+            }
+        )
+    _emit_payload(
+        {
+            "research_id": args.research_id,
+            "run_id": args.run_id,
+            "target": args.target,
+            "target_id": target_id,
+            "preview": bool(args.preview),
+            "papers_processed": len(results),
+            "model_calls": 0,
+            "results": results,
+        },
+        args.format,
+    )
+    return 0
+
+
 def _research(settings: HarnessSettings, args: argparse.Namespace) -> int:
     if args.research_command == "canary":
         return _run_research_canary(settings, args)
+
+    if args.research_command == "publish-staged":
+        return _run_publish_staged(settings, args)
 
     if args.research_command == "export-trajectory":
         destination = trajectory_directory(

@@ -29,6 +29,7 @@ GapType = Literal[
 ResearchAction = Literal[
     "search",
     "ingest",
+    "revise_evidence",
     "analyze_claims",
     "expand_citations",
     "verify",
@@ -51,7 +52,14 @@ StopReason = Literal[
     "human_review_required",
 ]
 TARGET_REQUIRED_ACTIONS = frozenset(
-    {"search", "ingest", "analyze_claims", "expand_citations", "verify"}
+    {
+        "search",
+        "ingest",
+        "revise_evidence",
+        "analyze_claims",
+        "expand_citations",
+        "verify",
+    }
 )
 
 
@@ -96,6 +104,7 @@ class CorpusSnapshot(StrictModel):
     candidates_by_relevance: Dict[str, int]
     core_candidates: int = Field(ge=0)
     selected_for_ingest: int = Field(ge=0)
+    staged_for_wiki: int = Field(default=0, ge=0)
     ingested_papers: int = Field(ge=0)
     verified_papers: int = Field(ge=0)
     search_run_paths: Tuple[str, ...] = ()
@@ -135,6 +144,10 @@ class EvidenceSnapshot(StrictModel):
     model_families: Dict[str, int]
     context_length_buckets: Dict[str, int]
     engineering_metrics: Dict[str, int]
+    revision_candidates: int = Field(default=0, ge=0)
+    revision_candidate_ids: Tuple[str, ...] = ()
+    revision_exhausted: int = Field(default=0, ge=0)
+    revision_exhausted_ids: Tuple[str, ...] = ()
 
 
 class QualitySnapshot(StrictModel):

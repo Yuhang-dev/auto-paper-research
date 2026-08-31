@@ -27,6 +27,10 @@ from tools.wiki.models import Entity
 from tools.wiki.validator import validate_index
 
 from .config import HarnessSettings
+from .evidence_revision import (
+    evidence_revision_candidates,
+    evidence_revision_exhausted,
+)
 from .research_models import (
     ActionAttemptStats,
     CorpusSnapshot,
@@ -362,7 +366,7 @@ def inspect_research(
             candidate_id = str(candidate.get("candidate_id") or f"@{run_id}:{position}")
             record = candidates.setdefault(
                 candidate_id,
-                {"labels": set(), "selected": False},
+                {"labels": set(), "selected": False, "staged": False},
             )
             relevance = candidate.get("relevance")
             label = relevance.get("label") if isinstance(relevance, Mapping) else None
@@ -370,6 +374,8 @@ def inspect_research(
                 record["labels"].add(str(label))
             if candidate.get("review_state") == "selected-for-ingest":
                 record["selected"] = True
+            if candidate.get("review_state") == "staged-for-wiki":
+                record["staged"] = True
 
         raw_coverage = payload.get("coverage")
         coverage: Mapping[str, Any] = (
@@ -438,6 +444,7 @@ def inspect_research(
 
     relevance_counts: Counter[str] = Counter()
     selected_for_ingest = 0
+    staged_for_wiki = 0
     for record in candidates.values():
         labels = record["labels"]
         if not labels:
@@ -447,6 +454,7 @@ def inspect_research(
         else:
             relevance_counts["conflict"] += 1
         selected_for_ingest += bool(record["selected"])
+        staged_for_wiki += bool(record["staged"])
     for label in (*RELEVANCE_LABELS, "untriaged", "conflict"):
         relevance_counts.setdefault(label, 0)
 
@@ -541,6 +549,8 @@ def inspect_research(
         model_families[family or "unclassified"] += 1
 
     diagnostic_codes = Counter(item.code for item in diagnostics)
+    revision_candidates = evidence_revision_candidates(index)
+    revision_exhausted = evidence_revision_exhausted(index)
     search_hashes = [
         {
             "path": path.relative_to(settings.repository_root).as_posix(),
@@ -590,6 +600,7 @@ def inspect_research(
         candidates_by_relevance=dict(sorted(relevance_counts.items())),
         core_candidates=relevance_counts.get("core", 0),
         selected_for_ingest=selected_for_ingest,
+        staged_for_wiki=staged_for_wiki,
         ingested_papers=len(papers),
         verified_papers=sum(
             entity.metadata.get("status") == "verified" for entity in papers
@@ -654,6 +665,14 @@ def inspect_research(
         model_families=dict(sorted(model_families.items())),
         context_length_buckets=dict(context_lengths),
         engineering_metrics=dict(engineering_metrics),
+        revision_candidates=len(revision_candidates),
+        revision_candidate_ids=tuple(
+            str(entity.entity_id) for entity in revision_candidates if entity.entity_id
+        ),
+        revision_exhausted=len(revision_exhausted),
+        revision_exhausted_ids=tuple(
+            str(entity.entity_id) for entity in revision_exhausted if entity.entity_id
+        ),
     )
     quality = QualitySnapshot(
         schema_errors=sum(item.severity == "ERROR" for item in diagnostics),
@@ -784,6 +803,46 @@ def evaluate_gaps(
                     f"{snapshot.corpus.selected_for_ingest} candidates are selected for ingest.",
                 ),
                 recommended_action="ingest",
+            )
+        )
+    if snapshot.evidence.revision_candidates:
+        gaps.append(
+            _gap(
+                gap_type="evidence_gap",
+                key="verifier-retained-evidence-revision",
+                question=(
+                    "Which verifier-retained method or claim should be corrected "
+                    "from its source before independent re-verification?"
+                ),
+                priority=0.965,
+                reasons=(
+                    f"{snapshot.evidence.revision_candidates} entities have "
+                    "actionable verifier feedback.",
+                    "Revision is bounded to source contradictions or locator "
+                    "defects and cannot mark an entity verified.",
+                ),
+                recommended_action="revise_evidence",
+                evidence={"entity_ids": snapshot.evidence.revision_candidate_ids},
+                blocking=True,
+            )
+        )
+    if snapshot.evidence.revision_exhausted:
+        gaps.append(
+            _gap(
+                gap_type="evidence_gap",
+                key="evidence-revision-budget-exhausted",
+                question=(
+                    "Which repeatedly unresolved evidence records require human review "
+                    "or a new source?"
+                ),
+                priority=0.96,
+                reasons=(
+                    f"{snapshot.evidence.revision_exhausted} entities reached "
+                    "the two-revision limit.",
+                ),
+                recommended_action="synthesize",
+                evidence={"entity_ids": snapshot.evidence.revision_exhausted_ids},
+                blocking=True,
             )
         )
     if snapshot.corpus.core_candidates < criteria.minimum_core_candidates:
@@ -1275,6 +1334,7 @@ def measure_progress(
         "verified_nonconsensus_assessments": before.evidence.verified_nonconsensus_assessments,
         "evidence_locators": before.evidence.experiments_with_evidence_locator,
         "benchmarks": before.evidence.benchmarks_total,
+        "revision_candidates": before.evidence.revision_candidates,
     }
     after_metrics = {
         "unique_candidates": after.corpus.unique_candidates,
@@ -1294,6 +1354,7 @@ def measure_progress(
         "verified_nonconsensus_assessments": after.evidence.verified_nonconsensus_assessments,
         "evidence_locators": after.evidence.experiments_with_evidence_locator,
         "benchmarks": after.evidence.benchmarks_total,
+        "revision_candidates": after.evidence.revision_candidates,
     }
     deltas = {
         name: after_metrics[name] - before_metrics[name] for name in before_metrics
@@ -1313,11 +1374,13 @@ def measure_progress(
         "verified_nonconsensus_assessments": 3.0,
         "evidence_locators": 1.0,
         "benchmarks": 1.0,
+        "revision_candidates": 0.0,
     }
     progress_score = sum(
         max(deltas[name], 0) * weight for name, weight in weights.items()
     )
     progress_score += max(-deltas["selected_for_ingest"], 0) * 0.5
+    progress_score += max(-deltas["revision_candidates"], 0) * 1.5
     made_progress = progress_score > 0
     if action_attempted:
         no_progress_rounds = 0 if made_progress else previous_no_progress_rounds + 1

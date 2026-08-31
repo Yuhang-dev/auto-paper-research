@@ -48,7 +48,9 @@ STAGE_RANK = {
     "screening": 2,
     "ingest": 3,
     "verification": 4,
-    "analysis": 5,
+    "revision": 5,
+    "reverification": 6,
+    "analysis": 7,
 }
 
 
@@ -342,6 +344,7 @@ def _gap_for(
             "search": "coverage_gap",
             "ingest": "evidence_gap",
             "verify": "evidence_gap",
+            "revise_evidence": "evidence_gap",
             "analyze_claims": "contradiction_gap",
         }[action],
     )
@@ -425,6 +428,50 @@ def _build_canary_graph(
 
         return execute
 
+    single_ingest = action_node("ingest", "ingest")
+
+    def ingest_batch(state: CanaryGraphState) -> Dict[str, Any]:
+        """Read a bounded paper batch before the graph advances to publication/QA."""
+
+        if limits.max_papers_ingested == 1:
+            return single_ingest(state)
+        results = list(state.get("action_results") or [])
+        errors = list(state.get("error_codes") or [])
+        snapshot = ResearchSnapshot.model_validate(state["snapshot"])
+        completed = 0
+        failed = False
+        while completed < limits.max_papers_ingested:
+            if len(results) >= limits.max_actions:
+                errors.append("max-actions")
+                failed = True
+                break
+            if snapshot.corpus.selected_for_ingest == 0:
+                break
+            gap = _gap_for("ingest", snapshot, run_path)
+            result = executor.execute(
+                decision=_decision("ingest", gap),
+                gap=gap,
+                snapshot=snapshot,
+                action_id=f"canary-action-{len(results) + 1:04d}",
+                allow_network=True,
+            )
+            results.append(result.model_dump(mode="json"))
+            errors.extend(result.error_codes)
+            if result.outcome not in {"positive", "negative_research_result"}:
+                failed = True
+                break
+            completed += 1
+            snapshot = inspect_research(settings, research_id)
+        return {
+            "phase": "stopped" if failed or completed == 0 else "ingest",
+            "stage_reached": (
+                "ingest" if completed else state.get("stage_reached", "screening")
+            ),
+            "snapshot": snapshot.model_dump(mode="json"),
+            "action_results": results,
+            "error_codes": list(dict.fromkeys(errors)),
+        }
+
     def observe(next_phase: str):
         def inspect(state: CanaryGraphState) -> Dict[str, Any]:
             return {
@@ -456,10 +503,40 @@ def _build_canary_graph(
     builder.add_node("bootstrap", bootstrap)
     builder.add_node("search", action_node("search", search_reached))
     builder.add_node("observe_search", observe("ingest"))
-    builder.add_node("ingest", action_node("ingest", "ingest"))
+    builder.add_node("ingest", ingest_batch)
     builder.add_node("observe_ingest", observe("verification"))
     builder.add_node("verify", action_node("verify", "verification"))
-    builder.add_node("observe_verify", observe("analysis"))
+    builder.add_node("observe_verify", observe("revision"))
+    execute_revision = action_node("revise_evidence", "revision")
+
+    def revise_or_skip(state: CanaryGraphState) -> Dict[str, Any]:
+        snapshot = ResearchSnapshot.model_validate(state["snapshot"])
+        if snapshot.evidence.revision_candidates == 0:
+            return {
+                "phase": "revision",
+                "stage_reached": "revision",
+            }
+        return execute_revision(state)
+
+    builder.add_node("revise", revise_or_skip)
+    builder.add_node("observe_revision", observe("reverification"))
+    execute_reverification = action_node("verify", "reverification")
+
+    def reverify_or_skip(state: CanaryGraphState) -> Dict[str, Any]:
+        revised = any(
+            item.get("action") == "revise_evidence"
+            and item.get("outcome") == "positive"
+            for item in state.get("action_results") or []
+        )
+        if not revised:
+            return {
+                "phase": "reverification",
+                "stage_reached": "reverification",
+            }
+        return execute_reverification(state)
+
+    builder.add_node("reverify", reverify_or_skip)
+    builder.add_node("observe_reverify", observe("analysis"))
     builder.add_node("analyze", action_node("analyze_claims", "analysis"))
     builder.add_edge(START, "bootstrap")
     builder.add_edge("bootstrap", "search")
@@ -480,7 +557,19 @@ def _build_canary_graph(
         action_route(limits.stop_after, "observe"),
         {"stop": END, "observe": "observe_verify"},
     )
-    builder.add_edge("observe_verify", "analyze")
+    builder.add_edge("observe_verify", "revise")
+    builder.add_conditional_edges(
+        "revise",
+        action_route(limits.stop_after, "observe"),
+        {"stop": END, "observe": "observe_revision"},
+    )
+    builder.add_edge("observe_revision", "reverify")
+    builder.add_conditional_edges(
+        "reverify",
+        action_route(limits.stop_after, "observe"),
+        {"stop": END, "observe": "observe_reverify"},
+    )
+    builder.add_edge("observe_reverify", "analyze")
     builder.add_edge("analyze", END)
     return builder.compile(
         checkpointer=persistence.checkpointer,
@@ -525,6 +614,7 @@ def run_canary(
             isolated,
             timeout_seconds=min(limits.deadline_seconds, 180),
             artifact_recorder=recorder,
+            max_selected_candidates=limits.max_selected_candidates,
         )
         if settings.model
         else None
@@ -535,6 +625,8 @@ def run_canary(
         search_runtime=runtime,
         search_limits=SearchExecutionLimits.from_canary(limits),
         artifact_recorder=recorder,
+        defer_wiki=limits.wiki_write_mode == "deferred",
+        stage_root=canary_root / "artifacts" / "staged",
         paper_source_acquirer=ArxivPaperSourceAcquirer(
             settings.repository_root,
             destination_root=canary_root / "workspace" / "sources" / "papers",
@@ -598,6 +690,11 @@ def run_canary(
     new_candidates = (
         search_result.metrics.get("new_candidates", 0) if search_result else 0
     )
+    completed_ingests = sum(
+        item.get("action") == "ingest"
+        and item.get("outcome") in {"positive", "negative_research_result"}
+        for item in action_results
+    )
     invariants = {
         "formal_source_truth_unchanged": formal_hash_before == formal_hash_after,
         "workspace_isolated": run_path.resolve().is_relative_to(
@@ -611,9 +708,11 @@ def run_canary(
             new_candidates <= limits.max_new_unique_candidates
         ),
         "paper_ingest_limit_respected": (
-            sandbox_snapshot.corpus.ingested_papers
-            - initial_snapshot.corpus.ingested_papers
-            <= limits.max_papers_ingested
+            completed_ingests <= limits.max_papers_ingested
+        ),
+        "deferred_wiki_unchanged": (
+            limits.wiki_write_mode != "deferred"
+            or sandbox_snapshot.wiki_source_hash == initial_snapshot.wiki_source_hash
         ),
     }
     reached_target = STAGE_RANK[reached] >= STAGE_RANK[limits.stop_after]

@@ -8,6 +8,7 @@
 - [ ] retrieval Canary 至少成功一次，所有硬边界为 true；
 - [ ] screening Canary 至少成功一次，并完成候选人工抽查；
 - [ ] ingest → verification 的隔离闭环至少成功一次；
+- [ ] 至少一个可操作 `needs-review` 完成 revision → independent reverification，或记录“无修订候选”的 Canary 结果；
 - [ ] Ctrl+C / publish exception 的 Wiki transaction rollback 测试通过；
 - [ ] deadline 强制终止只留下隔离 workspace，不修改正式真源；
 - [ ] 同一个 `--thread` 的 replan/checkpoint resume 行为已验证；

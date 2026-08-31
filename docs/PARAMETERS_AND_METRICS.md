@@ -314,7 +314,7 @@ DeepXiv filters 是限制性交集。`scope.years` 等 scope 字段只是研究�
 | 单次自动规划 query 数 | I | `1..4` | `SearchPlanDraft.queries` |
 | planner 参考的历史 query 数 | I | 最后 `80` 条 | 避免 prompt 无界增长 |
 | screening batch size | I | `12` | 合法范围 `1..16` |
-| 每个 Search Run 最多 selected-for-ingest | I | `3` | 合法范围 `1..20`；按模型显式选择、总分、candidate ID 排序 |
+| 每个 Search Run 最多 selected-for-ingest | A/I | `3` | Canary 可用 `--max-selected-candidates` 调整，合法范围 `1..20`；按模型显式选择、总分、candidate ID 排序 |
 | 每批 screening 返回数 | F | `1..16` | 每个 supplied candidate 必须恰好判断一次 |
 | 五个 relevance score | C/语义判断 | 每项 `0..2` | `sparsity_alignment`、`long_context_alignment`、`evidence_value`、`engineering_value`、`challenge_value` |
 | score total | C | `0..10` | 五项直接求和；没有机械 core 阈值 |
@@ -364,6 +364,7 @@ Wiki validator 构建下列只读快照。
 | `candidates_by_relevance` | `core/adjacent/background/exclude/untriaged/conflict` 计数 |
 | `core_candidates` | 跨 run 唯一 candidate 中唯一 label 为 core 的数量 |
 | `selected_for_ingest` | 跨 run 唯一 candidate 中至少一次处于 selected-for-ingest 的数量 |
+| `staged_for_wiki` | 跨 run 唯一 candidate 中至少一次处于 staged-for-wiki 的数量；尚未计入 Wiki paper |
 | `ingested_papers` | Wiki 唯一 `paper` 实体数 |
 | `verified_papers` | Wiki paper 中 `status: verified` 的数量 |
 | `search_run_paths` | 被检查的 run 相对路径 |
@@ -415,6 +416,8 @@ search、ingest 还是 verify，不能满足正式 Done 的 evidence facet requi
 | `model_families` | model `family` casefold 后计数；缺失为 unclassified |
 | `context_length_buckets` | experiment 按固定区间计数，见下一节 |
 | `engineering_metrics` | experiment metric 名称/类型按固定关键词分类计数，见下一节 |
+| `revision_candidates` / `revision_candidate_ids` | `needs-review` method/claim 中具有可操作 verifier 矛盾或 locator 反馈、且修订次数少于 2 的数量与 ID |
+| `revision_exhausted` / `revision_exhausted_ids` | 已达到两轮修订上限、仍为 `needs-review` 的 method/claim 数量与 ID |
 
 ### 7.4 QualitySnapshot
 
@@ -464,8 +467,8 @@ search、ingest 还是 verify，不能满足正式 Done 的 evidence facet requi
 
 ## 9. ProgressMeasurement：计算项与权重
 
-`measure_progress(before, after)` 只比较结构化快照。负 delta 通常不扣分；唯一例外是
-`selected_for_ingest` 减少会被视为成功消费 handoff，仍加正分。
+`measure_progress(before, after)` 只比较结构化快照。负 delta 通常不扣分；
+`selected_for_ingest` 或 `revision_candidates` 减少会被视为成功消费 handoff/反馈，仍加正分。
 
 | Delta | 固定权重 | 类别 |
 |---|---:|---|
@@ -484,6 +487,7 @@ search、ingest 还是 verify，不能满足正式 Done 的 evidence facet requi
 | `verified_nonconsensus_assessments` | `3.0` | I/C |
 | `evidence_locators` | `1.0` | I/C |
 | `benchmarks` | `1.0` | I/C |
+| `revision_candidates` 负增长的绝对值 | `1.5` | I/C |
 
 公式：
 
@@ -624,6 +628,7 @@ max_research_iterations * 8 + 32
 | `search` | `queries_planned`、`queries_selected`、`queries_attempted`、`queries_succeeded`、`queries_failed`、`empty_results`、`new_candidates`、`candidates_triaged`、`candidates_selected_for_ingest`、`candidates_excluded` |
 | `ingest` | `candidates_selected`、`entities_created`、`entities_reused`、`pages_changed`、`candidate_states_updated`、`pdf_pages`、`paper_sources_attempted`、`paper_sources_acquired`、`ingest_model_calls`、`schema_repair_attempted`、`schema_repair_applied`、`structured_output_invalid_attempts` |
 | `verify` | `verification_targets`、`entities_verified`、`entities_unresolved`、`pages_changed` |
+| `revise_evidence` | `revision_targets`、`fields_revised`、`pages_changed` |
 | `analyze_claims` | `assessments_created`、`pages_changed` |
 
 `tool_calls` 的口径是 action 内的实际 provider/model/acquisition 调用记账，不等同于
@@ -684,6 +689,7 @@ Thread ID 必须是 1..200 位 ASCII 字母、数字、`.`、`:`、`_`、`-`，�
 | `validate_search_run.py` | `run`、`--fix-metrics`、`--strict`、`--json` | fix-metrics 会原子重写计算指标 |
 | `validate_ingest_draft.py` | `draft`、`--format text|json` | text |
 | `validate_verification_draft.py` | `draft`、`--kind paper|assessment`、`--json` | kind 必填 |
+| `validate_revision_draft.py` | `draft`、`--json` | 只校验受限修订 Draft，不发布 |
 | `validate_assessment_draft.py` | `draft`、`--json` | 只校验，不发布 |
 
 ## 13. Agent tools 的运行参数
@@ -727,6 +733,9 @@ text/topic/kind/evidence IDs 会得到相同 hash key，并增加 `confirmations
 | verification excerpt chars | I | `90000` | PDF 验证 prompt 上限 |
 | verification decisions | F | 最多 `80` | 每个 supplied entity 必须恰好一个 decision |
 | verification pages/decision | F | 最多 `24` | 页码必须在 PDF 范围内 |
+| evidence revision attempts/entity | F | 最多 `2` | 达到上限后不再自动修订，形成 blocking human-review gap |
+| evidence revision fields | F | reason/type allow-list | locator 仅 evidence；method contradiction 仅 definition/evidence；claim contradiction 仅 statement/scope/evidence |
+| evidence revision excerpt chars | I | `90000` | 复用 page-aware verification excerpt，所有 source_pages 必须位于其中 |
 | non-consensus entity body chars | I | `4000` | 每个实体 prompt 片段 |
 | non-consensus max claims | I | `24` | 必须 >0 |
 | non-consensus max experiments | I | `40` | 必须 >0 |
@@ -750,11 +759,11 @@ text/topic/kind/evidence IDs 会得到相同 hash key，并增加 `confirmations
 | Query status | `planned / succeeded / empty / failed / skipped-duplicate / blocked-credential` |
 | Candidate relevance | `core / adjacent / background / exclude`；未筛选时为 null |
 | Candidate review state | `metadata-only / abstract-screened / selected-for-ingest / ingested / excluded / needs-review` |
-| Research action | `search / ingest / analyze_claims / expand_citations / verify / synthesize / finish` |
+| Research action | `search / ingest / revise_evidence / analyze_claims / expand_citations / verify / synthesize / finish` |
 | Action status | `success / partial / failed / blocked` |
 | Action outcome | `positive / negative_research_result / tool_failure / precondition_blocked / unsupported` |
 
-当前 executor 实际支持 `search / ingest / verify / analyze_claims`。
+当前 executor 实际支持 `search / ingest / verify / revise_evidence / analyze_claims`。
 `expand_citations / synthesize / finish` 存在于控制协议中，但不是同级可变更 executor。
 
 Wiki 页面字段、relation 与 verified gate 详见 `wiki/_meta/schema.yaml`。这些是领域数据
@@ -817,7 +826,7 @@ Canary 参数均为 A：
 
 | 参数 | 默认值 | 约束 / 语义 |
 |---|---:|---|
-| `stop_after` | `screening` | `retrieval / screening / ingest / verification / analysis` |
+| `stop_after` | `screening` | `retrieval / screening / ingest / verification / revision / reverification / analysis` |
 | `max_planned_queries` | `1` | `1..8`；query planner 和既有 run 选择都受限 |
 | `max_provider_query_calls` | `1` | `1..8`；指 `Reader.search` 次数，不声称约束 SDK 内部 HTTP |
 | `max_new_unique_candidates` | `5` | `1..100`；按 provider rank + candidate ID 接受；重复项可继续合并 provenance |
@@ -828,13 +837,15 @@ Canary 参数均为 A：
 
 `retrieval` 和 `screening` 不是新的 `ResearchAction`；它们是 `search` action 内的两个
 观察边界。`stop_after=retrieval` 会在 `_execute_search()` 内跳过 screening。
+各 stage 的最低 `max_actions` 依次为 `1 / 1 / 2 / 3 / 4 / 5 / 6`；没有可操作修订
+反馈时 revision/reverification 会跳过实际 action，但仍完成对应观察边界。
 
 旧的“放宽 done-criteria 后跑完整 Outer Loop”只保留为 legacy 诊断方式，不再是联网
 验收首选，因为它会混淆“运行健康”与“正式研究完成”。
 
 ### 17.3 语义制品、trajectory 与人工标注
 
-Search plan、candidate screening、paper ingest、evidence verification 和
+Search plan、candidate screening、paper ingest、evidence verification、evidence revision 和
 non-consensus analysis 的结构化模型输出，在 Pydantic/语义合约验证后、确定性编译前
 写为 content-addressed immutable JSON。Skill 文件 hash、schema/reference hash、模型
 名、snapshot ID、Wiki source hash、PDF/Search Run hash 与输入 ID 一并记录。后续发布

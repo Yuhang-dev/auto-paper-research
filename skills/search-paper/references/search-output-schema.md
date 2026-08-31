@@ -188,14 +188,17 @@ Allowed review states:
 - `metadata-only`;
 - `abstract-screened`;
 - `selected-for-ingest`;
+- `staged-for-wiki`;
 - `ingested`;
 - `excluded`;
 - `needs-review`.
 
-After successful Wiki publication, the Harness changes `selected-for-ingest` to
-`ingested` and records canonical `paper_id`, timestamp, changed Wiki paths, and
-diagnostics under the candidate's `ingest` mapping. This prevents the Outer Loop
-from repeatedly selecting the same handoff.
+In deferred mode, successful semantic extraction changes `selected-for-ingest`
+to `staged-for-wiki` and records the content-addressed draft under
+`staged_ingest`. A later deterministic publication pass changes it to `ingested`
+and records canonical `paper_id`, timestamp, changed Wiki paths, and diagnostics
+under `ingest`. This prevents the Outer Loop from repeatedly selecting the same
+handoff while keeping first-pass reading separate from Wiki mutation.
 
 An excluded candidate requires `exclusion_reason`.
 

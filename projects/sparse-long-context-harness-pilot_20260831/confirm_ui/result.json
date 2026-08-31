@@ -1,0 +1,65 @@
+{
+  "primary_language": "zh-CN",
+  "canvas": "ppt169",
+  "audience": "课题负责人、研究与工程团队，以及需要审阅该方案的导师或技术负责人",
+  "communication_intent": "以调研结果与工程实现约 3:2 的篇幅，先展示技术谱系、初步证据、非共识线索和开源缺口，再说明 Harness、LoopEngineer 与 Error Book 的工程状态。",
+  "audience_outcome": "受众能够先理解稀疏长上下文方向的当前发现与证据边界，再判断 Harness 工程是否足以支撑下一轮定向调研。",
+  "core_message": "首期价值不在于一次生成综述，而在于建立可追溯的研究循环：Skill 约束、确定性脚本执行、结构化 Wiki 存证、独立验证和 Error Book 反馈共同收敛。",
+  "delivery_context": "主讲的 12–15 分钟技术/课题评审；会后作为可独立阅读的项目记录。",
+  "artifact_afterlife": "首期 Harness 架构与试运行基线，用于后续迭代、评审和交接。",
+  "content_divergence": "可重组现有材料以形成清晰叙事，但不扩展未经证据验证的研究结论。",
+  "delivery_purpose": "balanced",
+  "page_count": "16",
+  "mode": "pyramid",
+  "visual_style": "vintage-poster",
+  "color": {
+    "name": "研究蓝 + 证据橙",
+    "palette": {
+      "background": "#F8FAFC",
+      "secondary_bg": "#EAF0F6",
+      "primary": "#123B5D",
+      "accent": "#E76F2E",
+      "secondary_accent": "#2A9D8F",
+      "body_text": "#17212B"
+    }
+  },
+  "icons": "tabler-outline",
+  "typography": {
+    "name": "微软雅黑 + Georgia",
+    "heading": {
+      "css": "serif",
+      "english": "Georgia",
+      "primary": "Microsoft YaHei",
+      "sample_primary": "",
+      "sample_english": ""
+    },
+    "body": {
+      "css": "sans-serif",
+      "english": "Aptos",
+      "primary": "Microsoft YaHei",
+      "sample_primary": "",
+      "sample_english": ""
+    },
+    "body_size": 24,
+    "sizes": {
+      "title": 42,
+      "subtitle": 32,
+      "annotation": 18
+    },
+    "note": "",
+    "body_size_unit": "px"
+  },
+  "image_usage": [
+    "none"
+  ],
+  "image_notes": "不使用外部照片或 AI 图片；以可编辑 SVG 流程图、技术地图、证据表格和少量线性图标完成视觉表达。",
+  "proactive_speaker_notes": true,
+  "proactive_custom_animations": false,
+  "proactive_narration_audio": false,
+  "generation_mode": "continuous",
+  "refine_spec": false,
+  "design_spec_depth": "brief",
+  "stage": "final",
+  "status": "confirmed",
+  "confirmed_at": "2026-08-31T02:10:01"
+}

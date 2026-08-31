@@ -184,6 +184,8 @@ class LangChainEvidenceSemanticVerifier:
                         "constraints": {
                             "return_exact_entity_ids": True,
                             "supported_requires_source_pages": True,
+                            "return_only_excerpt_pages": True,
+                            "inspect_each_recorded_locator_page": True,
                         },
                         "output_json_schema": PaperVerificationDraft.model_json_schema(),
                     },
@@ -278,10 +280,22 @@ def _entity_record(entity: Entity, *, body_chars: int = 6_000) -> Dict[str, Any]
     }
 
 
-def _experiment_pdf_page(entity: Entity) -> Optional[int]:
+def _entity_evidence(entity: Entity) -> Mapping[str, Any]:
     evidence = entity.metadata.get("evidence")
-    if not isinstance(evidence, Mapping):
-        return None
+    if isinstance(evidence, Mapping):
+        return evidence
+    if entity.entity_type == "claim":
+        scope = entity.metadata.get("scope")
+        if isinstance(scope, Mapping):
+            locator = scope.get("evidence_locator")
+            page = scope.get("evidence_pdf_page")
+            if locator or page:
+                return {"locator": locator, "pdf_page": page}
+    return {}
+
+
+def _entity_pdf_page(entity: Entity) -> Optional[int]:
+    evidence = _entity_evidence(entity)
     for key in ("pdf_page", "page"):
         value = evidence.get(key)
         if isinstance(value, int) and value > 0:
@@ -323,19 +337,31 @@ def _render_excerpt(
     selected.update(
         page for page in requested_pages if 1 <= page <= len(document.pages)
     )
+    selected_pages = sorted(selected)
+    headers = {page: f"--- PDF p. {page} ---\n" for page in selected_pages}
+    fixed_chars = sum(len(value) for value in headers.values()) + max(
+        0, len(selected_pages) - 1
+    )
+    available_body_chars = max_chars - fixed_chars
+    if available_body_chars < 64 * len(selected_pages):
+        raise EvidenceVerificationError(
+            "Evidence excerpt budget is too small to include every requested page"
+        )
     parts: list[str] = []
     retained: list[int] = []
-    for page in sorted(selected):
-        header = f"--- PDF p. {page} ---\n"
+    remaining_chars = available_body_chars
+    remaining_pages = len(selected_pages)
+    for page in selected_pages:
+        header = headers[page]
         text = document.pages[page - 1].text
-        current = sum(len(item) + 1 for item in parts)
-        available = max_chars - current - len(header)
-        if available <= 64:
-            break
-        if len(text) > available:
-            text = text[: max(0, available - 24)] + "\n[page text truncated]"
+        page_budget = remaining_chars // remaining_pages
+        if len(text) > page_budget:
+            marker = "\n[page text truncated]"
+            text = text[: max(0, page_budget - len(marker))].rstrip() + marker
         parts.append(header + text)
         retained.append(page)
+        remaining_chars -= len(text)
+        remaining_pages -= 1
     return "\n".join(parts), tuple(retained)
 
 
@@ -408,7 +434,7 @@ class EvidenceVerificationPipeline:
         ]
         ids.update(entity.entity_id for entity in experiments if entity.entity_id)
         for experiment in experiments:
-            for field in ("method", "model", "benchmark"):
+            for field in ("method", "baseline_method", "model", "benchmark"):
                 ids.update(
                     str(value) for value in listify(experiment.metadata.get(field))
                 )
@@ -418,10 +444,29 @@ class EvidenceVerificationPipeline:
                     ids.update(str(value) for value in listify(relations.get(relation)))
         paper_relations = paper.metadata.get("relations") or {}
         if isinstance(paper_relations, Mapping):
-            for relation in ("proposes", "reports"):
+            for relation in ("proposes", "reports", "states"):
                 ids.update(
                     str(value) for value in listify(paper_relations.get(relation))
                 )
+        ids.update(
+            edge.target
+            for edge in index.edges
+            if edge.source == paper_id and edge.relation == "states"
+        )
+        ids.update(
+            entity.entity_id
+            for entity in unique.values()
+            if entity.entity_type == "claim"
+            and entity.entity_id
+            and str(entity.metadata.get("source_paper") or "") == paper_id
+        )
+        ids.update(
+            link.source
+            for link in index.links
+            if link.target == paper_id
+            and link.source in unique
+            and unique[link.source].entity_type == "claim"
+        )
         return tuple(unique[value] for value in sorted(ids) if value in unique)
 
     @staticmethod
@@ -431,6 +476,11 @@ class EvidenceVerificationPipeline:
             for entity in closure
             if entity.entity_id
             and entity.metadata.get("status") in {"candidate", "draft", "needs-review"}
+            and not (
+                entity.metadata.get("status") == "needs-review"
+                and isinstance(entity.metadata.get("revision_history"), list)
+                and len(entity.metadata["revision_history"]) >= 2
+            )
         )
 
     def _paper_target(
@@ -469,14 +519,22 @@ class EvidenceVerificationPipeline:
             "current_status": entity.metadata.get("status"),
             "schema_version": entity.metadata.get("schema_version"),
         }
-        if entity.entity_type == "experiment":
-            page = _experiment_pdf_page(entity)
-            locator = (entity.metadata.get("evidence") or {}).get("locator")
+        evidence = _entity_evidence(entity)
+        page = _entity_pdf_page(entity)
+        locator = evidence.get("locator")
+        if evidence:
             result.update(
                 {
                     "evidence_locator": locator,
                     "pdf_page": page,
-                    "locator_in_range": bool(page and page <= len(document.pages)),
+                    "locator_in_range": bool(
+                        locator and page and page <= len(document.pages)
+                    ),
+                }
+            )
+        if entity.entity_type == "experiment":
+            result.update(
+                {
                     "result_value_visible_on_page": bool(
                         page
                         and page <= len(document.pages)
@@ -492,6 +550,25 @@ class EvidenceVerificationPipeline:
                 and edge.relation in {"supports", "contradicts"}
             ]
             result["structured_evidence_ids"] = [edge.source for edge in edges]
+            scope = entity.metadata.get("scope")
+            if not isinstance(scope, Mapping):
+                scope = {}
+            result.update(
+                {
+                    "attribution": entity.metadata.get("attribution")
+                    or scope.get("attribution"),
+                    "evidence_type": entity.metadata.get("evidence_type")
+                    or scope.get("evidence_type"),
+                    "evidence_status": entity.metadata.get("evidence_status")
+                    or scope.get("evidence_status"),
+                    "source_paper_ids": [
+                        edge.source
+                        for edge in index.edges
+                        if edge.target == entity.entity_id
+                        and edge.relation == "states"
+                    ],
+                }
+            )
         return result
 
     def _verify_paper(
@@ -512,6 +589,11 @@ class EvidenceVerificationPipeline:
             if isinstance(check.get("pdf_page"), int)
         ]
         excerpt, retained_pages = _render_excerpt(document, requested_pages)
+        retained_page_set = set(retained_pages)
+        for check in prechecks.values():
+            page = check.get("pdf_page")
+            if isinstance(page, int):
+                check["locator_page_in_excerpt"] = page in retained_page_set
         records = []
         for entity in targets:
             record = _entity_record(entity)
@@ -588,27 +670,68 @@ class EvidenceVerificationPipeline:
             check = prechecks[entity_id]
             promotable = decision.verdict == "supported" and bool(decision.pdf_pages)
             gate_reasons = []
-            if entity.entity_type == "experiment":
+            gate_codes = []
+            locator_page = check.get("pdf_page")
+            if check.get("evidence_locator") is not None:
                 if not check.get("locator_in_range"):
                     promotable = False
+                    gate_codes.append("evidence-locator-invalid")
                     gate_reasons.append("evidence locator is missing or out of range")
+                if not check.get("locator_page_in_excerpt"):
+                    promotable = False
+                    gate_codes.append("locator-page-absent")
+                    gate_reasons.append("cited evidence page was absent from the excerpt")
+                if locator_page not in decision.pdf_pages:
+                    promotable = False
+                    gate_codes.append("locator-page-not-inspected")
+                    gate_reasons.append("semantic decision did not inspect the cited page")
+            if entity.entity_type == "experiment":
                 if not check.get("result_value_visible_on_page"):
                     promotable = False
+                    gate_codes.append("experiment-result-not-visible")
                     gate_reasons.append(
                         "recorded result value is absent from the cited page"
                     )
             if entity.entity_type == "claim":
-                evidence_ids = set(check.get("structured_evidence_ids") or [])
-                if not evidence_ids.intersection(verified_after):
-                    promotable = False
-                    gate_reasons.append("no linked experiment is verified")
-                if decision.claim_assessment not in {
-                    "supported",
-                    "contested",
-                    "refuted",
-                }:
-                    promotable = False
-                    gate_reasons.append("claim assessment is unresolved")
+                if check.get("evidence_type") == "author-stated":
+                    if check.get("attribution") != "author":
+                        promotable = False
+                        gate_codes.append("author-attribution-invalid")
+                        gate_reasons.append(
+                            "direct-source promotion requires author attribution"
+                        )
+                    if check.get("evidence_status") != "located":
+                        promotable = False
+                        gate_codes.append("author-evidence-not-located")
+                        gate_reasons.append(
+                            "direct-source promotion requires located evidence"
+                        )
+                    if paper_id not in set(check.get("source_paper_ids") or []):
+                        promotable = False
+                        gate_codes.append("source-paper-edge-missing")
+                        gate_reasons.append(
+                            "claim has no structured edge to the verified source paper"
+                        )
+                    if decision.claim_assessment != "supported":
+                        promotable = False
+                        gate_codes.append("claim-assessment-unsupported")
+                        gate_reasons.append(
+                            "direct author-stated claim was not assessed as supported"
+                        )
+                else:
+                    evidence_ids = set(check.get("structured_evidence_ids") or [])
+                    if not evidence_ids.intersection(verified_after):
+                        promotable = False
+                        gate_codes.append("verified-experiment-edge-missing")
+                        gate_reasons.append("no linked experiment is verified")
+                    if decision.claim_assessment not in {
+                        "supported",
+                        "contested",
+                        "refuted",
+                    }:
+                        promotable = False
+                        gate_codes.append("claim-assessment-unresolved")
+                        gate_reasons.append("claim assessment is unresolved")
             metadata = dict(entity.metadata)
             metadata["updated_at"] = timestamp
             metadata["status"] = "verified" if promotable else "needs-review"
@@ -624,6 +747,7 @@ class EvidenceVerificationPipeline:
                 "source_sha256": document.sha256,
                 "pdf_pages": list(decision.pdf_pages),
                 "rationale": rationale,
+                "gate_codes": list(dict.fromkeys(gate_codes)),
                 "prechecks": check,
             }
             pages[entity.relative_path] = render_wiki_page(metadata, entity.body)

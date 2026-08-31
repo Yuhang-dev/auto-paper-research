@@ -23,6 +23,11 @@ from .evidence_verification import (
     EvidenceVerificationResult,
     VerificationPreconditionError,
 )
+from .evidence_revision import (
+    EvidenceRevisionPipeline,
+    EvidenceRevisionPreconditionError,
+    EvidenceRevisionResult,
+)
 from .ingest_models import IngestCandidate, PaperIngestResult
 from .nonconsensus_analysis import (
     NonConsensusAnalysisPipeline,
@@ -48,6 +53,7 @@ from .research_models import (
 )
 from .skill_registry import SkillRegistry
 from .search_runtime import SearchRuntime
+from .staged_ingest import StagedPaperStore
 
 
 QUERY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -64,6 +70,8 @@ class IngestPipeline(Protocol):
         candidate: IngestCandidate,
         *,
         preview: bool = False,
+        defer_wiki: bool = False,
+        research_id: Optional[str] = None,
         artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> PaperIngestResult: ...
 
@@ -79,6 +87,19 @@ class VerificationPipeline(Protocol):
         snapshot: ResearchSnapshot,
         artifact_context: Optional[SemanticArtifactContext] = None,
     ) -> EvidenceVerificationResult: ...
+
+
+class RevisionPipeline(Protocol):
+    @property
+    def requires_network(self) -> bool: ...
+
+    def revise_next(
+        self,
+        *,
+        gap: ResearchGap,
+        snapshot: ResearchSnapshot,
+        artifact_context: Optional[SemanticArtifactContext] = None,
+    ) -> EvidenceRevisionResult: ...
 
 
 class ClaimAnalysisPipeline(Protocol):
@@ -196,9 +217,12 @@ class DeterministicActionExecutor:
         search_runtime: Optional[SearchRuntime] = None,
         paper_source_acquirer: Optional[PaperSourceAcquirer] = None,
         verification_pipeline: Optional[VerificationPipeline] = None,
+        revision_pipeline: Optional[RevisionPipeline] = None,
         claim_analysis_pipeline: Optional[ClaimAnalysisPipeline] = None,
         search_limits: Optional[SearchExecutionLimits] = None,
         artifact_recorder: Optional[SemanticArtifactRecorder] = None,
+        defer_wiki: bool = False,
+        stage_root: Optional[Path] = None,
     ):
         if timeout_seconds < 1:
             raise ValueError("timeout_seconds must be positive")
@@ -208,9 +232,16 @@ class DeterministicActionExecutor:
         self._ingest_pipeline = ingest_pipeline
         self._search_runtime = search_runtime
         self._verification_pipeline = verification_pipeline
+        self._revision_pipeline = revision_pipeline
         self._claim_analysis_pipeline = claim_analysis_pipeline
         self.search_limits = search_limits
         self.artifact_recorder = artifact_recorder
+        self.defer_wiki = defer_wiki
+        self.stage_store = (
+            StagedPaperStore(settings.repository_root, stage_root)
+            if defer_wiki or stage_root is not None
+            else None
+        )
         self._paper_source_acquirer = paper_source_acquirer or ArxivPaperSourceAcquirer(
             settings.repository_root,
             timeout_seconds=min(timeout_seconds, 120),
@@ -223,6 +254,8 @@ class DeterministicActionExecutor:
             actions.add("ingest")
         if self._verification_pipeline is not None or self.settings.model:
             actions.add("verify")
+        if self._revision_pipeline is not None or self.settings.model:
+            actions.add("revise_evidence")
         if self._claim_analysis_pipeline is not None or self.settings.model:
             actions.add("analyze_claims")
         return frozenset(actions)
@@ -260,6 +293,18 @@ class DeterministicActionExecutor:
             if gap is None:
                 raise ValueError("A verify decision must resolve to its target gap")
             return self._execute_verify(
+                decision=decision,
+                gap=gap,
+                snapshot=snapshot,
+                action_id=action_id,
+                allow_network=allow_network,
+            )
+        if decision.action == "revise_evidence":
+            if gap is None:
+                raise ValueError(
+                    "A revise_evidence decision must resolve to its target gap"
+                )
+            return self._execute_revise_evidence(
                 decision=decision,
                 gap=gap,
                 snapshot=snapshot,
@@ -502,6 +547,7 @@ class DeterministicActionExecutor:
             pipeline = PaperIngestPipeline(
                 self.settings,
                 artifact_recorder=self.artifact_recorder,
+                stage_store=self.stage_store,
             )
             self._ingest_pipeline = pipeline
         return pipeline
@@ -627,6 +673,115 @@ class DeterministicActionExecutor:
             },
         )
 
+    def _revision(self) -> RevisionPipeline:
+        pipeline = self._revision_pipeline
+        if pipeline is None:
+            pipeline = EvidenceRevisionPipeline(
+                self.settings,
+                artifact_recorder=self.artifact_recorder,
+            )
+            self._revision_pipeline = pipeline
+        return pipeline
+
+    def _execute_revise_evidence(
+        self,
+        *,
+        decision: ResearchDecision,
+        gap: ResearchGap,
+        snapshot: ResearchSnapshot,
+        action_id: str,
+        allow_network: bool,
+    ) -> ResearchActionResult:
+        try:
+            pipeline = self._revision()
+        except EvidenceRevisionPreconditionError as exc:
+            return ResearchActionResult(
+                action_id=action_id,
+                action="revise_evidence",
+                target_gap_id=decision.target_gap_id,
+                status="blocked",
+                outcome="precondition_blocked",
+                attempted=False,
+                summary=str(exc),
+                error_codes=("evidence-revision-model-required",),
+            )
+        if pipeline.requires_network and not allow_network:
+            return ResearchActionResult(
+                action_id=action_id,
+                action="revise_evidence",
+                target_gap_id=decision.target_gap_id,
+                status="blocked",
+                outcome="precondition_blocked",
+                attempted=False,
+                summary=(
+                    "Semantic evidence revision requires explicit network "
+                    "authorization for this invocation."
+                ),
+                error_codes=("evidence-revision-network-disabled",),
+            )
+        try:
+            revise_kwargs: Dict[str, Any] = {}
+            if self.artifact_recorder is not None:
+                revise_kwargs["artifact_context"] = SemanticArtifactContext(
+                    research_id=snapshot.research_id,
+                    action_id=action_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    wiki_source_hash=snapshot.wiki_source_hash,
+                    source_ids=(gap.id,),
+                )
+            result = pipeline.revise_next(
+                gap=gap,
+                snapshot=snapshot,
+                **revise_kwargs,
+            )
+        except EvidenceRevisionPreconditionError as exc:
+            return ResearchActionResult(
+                action_id=action_id,
+                action="revise_evidence",
+                target_gap_id=decision.target_gap_id,
+                status="blocked",
+                outcome="precondition_blocked",
+                attempted=False,
+                summary=str(exc),
+                error_codes=("evidence-revision-target-not-ready",),
+            )
+        except Exception as exc:
+            return ResearchActionResult(
+                action_id=action_id,
+                action="revise_evidence",
+                target_gap_id=decision.target_gap_id,
+                status="failed",
+                outcome="tool_failure",
+                attempted=True,
+                tool_calls=1,
+                summary=f"revise-evidence failed: {_safe_error(exc)}",
+                error_codes=("evidence-revision-failed",),
+            )
+        changed_sources = tuple(f"wiki/{path}" for path in result.changed_paths)
+        positive = bool(result.updated_fields)
+        return ResearchActionResult(
+            action_id=action_id,
+            action="revise_evidence",
+            target_gap_id=decision.target_gap_id,
+            status="success",
+            outcome="positive" if positive else "negative_research_result",
+            attempted=True,
+            tool_calls=result.model_calls,
+            changed_sources=changed_sources,
+            summary=(
+                f"revise-evidence processed {result.target_id} for "
+                f"{result.reason_code}: {len(result.updated_fields)} field(s) "
+                "changed; the entity is draft and requires independent verification."
+            ),
+            error_codes=(),
+            semantic_artifact_ids=result.semantic_artifact_ids,
+            metrics={
+                "revision_targets": 1,
+                "fields_revised": len(result.updated_fields),
+                "pages_changed": len(result.changed_paths),
+            },
+        )
+
     def _claim_analysis(self) -> ClaimAnalysisPipeline:
         pipeline = self._claim_analysis_pipeline
         if pipeline is None:
@@ -738,8 +893,8 @@ class DeterministicActionExecutor:
         candidate: IngestCandidate,
         result: PaperIngestResult,
     ) -> str:
-        if result.status not in {"published", "no-change"}:
-            raise ValueError("Only a published ingestion can close a candidate handoff")
+        if result.status not in {"staged", "published", "no-change"}:
+            raise ValueError("Only staged or published ingestion can update a handoff")
         repository_root = self.settings.repository_root.resolve()
         run_path = (repository_root / candidate.search_run_path).resolve()
         if not _is_within(run_path, repository_root) or not run_path.is_file():
@@ -758,9 +913,28 @@ class DeterministicActionExecutor:
                 break
         if matched is None:
             raise ValueError("Selected candidate disappeared from its search-run")
-        if matched.get("review_state") not in {"selected-for-ingest", "ingested"}:
+        if matched.get("review_state") not in {
+            "selected-for-ingest",
+            "staged-for-wiki",
+            "ingested",
+        }:
             raise ValueError("Selected candidate changed state during ingestion")
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if result.status == "staged":
+            matched["review_state"] = "staged-for-wiki"
+            matched["staged_ingest"] = {
+                "stage_id": result.stage_id,
+                "staged_path": result.staged_path,
+                "staged_at": timestamp,
+                "paper_id_proposal": result.paper_id,
+                "semantic_artifact_ids": list(result.semantic_artifact_ids),
+                "diagnostic_codes": list(result.diagnostic_codes),
+            }
+            run_metadata = run.get("run")
+            if isinstance(run_metadata, dict):
+                run_metadata["updated_at"] = timestamp
+            _write_yaml_atomic(run_path, run)
+            return _relative_path(self.settings, run_path)
         matched["review_state"] = "ingested"
         matched["ingest"] = {
             "paper_id": result.paper_id,
@@ -879,6 +1053,13 @@ class DeterministicActionExecutor:
                     ),
                     source_ids=(candidate.candidate_id,),
                 )
+            if self.defer_wiki:
+                ingest_kwargs.update(
+                    {
+                        "defer_wiki": True,
+                        "research_id": snapshot.research_id,
+                    }
+                )
             result = pipeline.ingest(candidate, **ingest_kwargs)
         except PaperIngestStructuredOutputError as exc:
             return ResearchActionResult(
@@ -931,6 +1112,9 @@ class DeterministicActionExecutor:
                 },
             )
         wiki_sources = tuple(f"wiki/{relative}" for relative in result.changed_paths)
+        staged_sources = (
+            (result.staged_path,) if result.staged_path else ()
+        )
         try:
             handoff_source = self._mark_candidate_ingested(candidate, result)
         except Exception as exc:
@@ -946,13 +1130,14 @@ class DeterministicActionExecutor:
                     dict.fromkeys(
                         (
                             *wiki_sources,
+                            *staged_sources,
                             *((promotion_source,) if promotion_source else ()),
                             *((acquisition_source,) if acquisition_source else ()),
                         )
                     )
                 ),
                 summary=(
-                    f"ingest-paper published {result.paper_id}, but the candidate "
+                    f"ingest-paper produced {result.paper_id}, but the candidate "
                     f"handoff state could not be updated: {_safe_error(exc, limit=400)}"
                 ),
                 error_codes=("ingest-handoff-update-failed",),
@@ -969,6 +1154,7 @@ class DeterministicActionExecutor:
             dict.fromkeys(
                 (
                     *wiki_sources,
+                    *staged_sources,
                     handoff_source,
                     *((promotion_source,) if promotion_source else ()),
                     *((acquisition_source,) if acquisition_source else ()),
@@ -985,11 +1171,18 @@ class DeterministicActionExecutor:
             tool_calls=result.model_calls + acquisition_calls,
             changed_sources=changed_sources,
             summary=(
-                f"ingest-paper processed {result.candidate_id} into {result.paper_id}: "
-                f"{len(result.created_entity_ids)} entities created, "
-                f"{len(result.reused_entity_ids)} reused, "
-                f"{len(wiki_sources)} Wiki source pages changed, and the candidate "
-                "handoff was closed."
+                (
+                    f"ingest-paper staged {result.candidate_id} as {result.stage_id}; "
+                    "no Wiki source page was read for entity lookup or published."
+                )
+                if result.status == "staged"
+                else (
+                    f"ingest-paper processed {result.candidate_id} into {result.paper_id}: "
+                    f"{len(result.created_entity_ids)} entities created, "
+                    f"{len(result.reused_entity_ids)} reused, "
+                    f"{len(wiki_sources)} Wiki source pages changed, and the candidate "
+                    "handoff was closed."
+                )
             ),
             error_codes=(),
             semantic_artifact_ids=result.semantic_artifact_ids,
@@ -998,6 +1191,7 @@ class DeterministicActionExecutor:
                 "entities_created": len(result.created_entity_ids),
                 "entities_reused": len(result.reused_entity_ids),
                 "pages_changed": len(wiki_sources),
+                "papers_staged": int(result.status == "staged"),
                 "candidate_states_updated": 1,
                 "pdf_pages": result.pdf_pages,
                 "paper_sources_acquired": int(bool(acquisition_source)),

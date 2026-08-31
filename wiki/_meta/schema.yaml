@@ -45,6 +45,7 @@ base:
     relations: mapping
     facets: list
     verification: mapping
+    revision_history: list
     analysis: mapping
 
 types:
@@ -84,6 +85,7 @@ types:
       implementations:
         - list
         - "null"
+      evidence: mapping
     verified_required:
       - definition
 
@@ -104,6 +106,9 @@ types:
       method:
         - string
         - list
+      baseline_method:
+        - string
+        - list
       model:
         - string
         - list
@@ -119,6 +124,9 @@ types:
         direction: inbound
       method:
         relation: uses_method
+        direction: outbound
+      baseline_method:
+        relation: compares_against
         direction: outbound
       model:
         relation: uses_model
@@ -146,6 +154,17 @@ types:
       statement: string
       assessment: string
       scope: mapping
+      attribution: string
+      evidence_type: string
+      evidence_status: string
+      evidence:
+        - mapping
+        - "null"
+      source_paper: string
+    relation_fields:
+      source_paper:
+        relation: states
+        direction: inbound
     verified_required:
       - statement
       - assessment
@@ -170,6 +189,7 @@ types:
       task: string
       metrics: list
       source: mapping
+      evidence: mapping
     verified_required:
       - task
       - metrics
@@ -191,6 +211,7 @@ types:
         - number
         - "null"
       source: mapping
+      evidence: mapping
     verified_required:
       - family
       - parameters

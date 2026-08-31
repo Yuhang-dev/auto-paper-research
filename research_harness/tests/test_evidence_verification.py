@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import tempfile
 import unittest
@@ -15,14 +16,21 @@ from research_harness.evidence_verification import (
     EvidenceVerificationPipeline,
     PaperVerificationDraft,
 )
-from research_harness.ingest_models import IngestCandidate
+from research_harness.evidence_revision import (
+    EvidenceRevisionDraft,
+    EvidenceRevisionPipeline,
+    EvidenceRevisionUpdates,
+    evidence_revision_reason,
+)
+from research_harness.ingest_models import EvidenceLocator, IngestCandidate
 from research_harness.nonconsensus_analysis import (
     ConditionAlignment,
     NonConsensusAnalysisPipeline,
     NonConsensusAssessmentDraft,
 )
 from research_harness.paper_ingest import PaperIngestPipeline
-from research_harness.research_evaluation import inspect_research
+from research_harness.research_evaluation import evaluate_gaps, inspect_research
+from research_harness.research_evaluation import load_done_criteria
 from research_harness.research_models import ResearchGap
 from research_harness.tests.test_paper_ingest import (
     LONG_LORA_PDF,
@@ -30,6 +38,7 @@ from research_harness.tests.test_paper_ingest import (
     paper_draft,
 )
 from tools.wiki.indexer import build_index
+from tools.wiki.models import Entity
 from tools.wiki.validator import validate_index
 from tools.wiki.writer import WikiSourceWriter, render_wiki_page
 
@@ -40,6 +49,9 @@ class StaticVerifier:
     def __init__(self) -> None:
         self.paper_calls = 0
         self.assessment_calls = 0
+        self.last_source_contract = None
+        self.last_entities = ()
+        self.last_excerpt = ""
 
     def verify_paper(
         self,
@@ -51,8 +63,11 @@ class StaticVerifier:
         entities,
         excerpt,
     ):
-        del skill, evidence_policy, source_contract, excerpt
+        del skill, evidence_policy
         self.paper_calls += 1
+        self.last_source_contract = source_contract
+        self.last_entities = tuple(entities)
+        self.last_excerpt = excerpt
         page_by_type = {
             "paper": 1,
             "method": 5,
@@ -68,7 +83,12 @@ class StaticVerifier:
                     entity_id=str(record["id"]),
                     verdict="supported",
                     rationale="The supplied PDF page supports the structured record.",
-                    pdf_pages=(page_by_type[str(record["type"])],),
+                    pdf_pages=(
+                        int(
+                            record["deterministic_precheck"].get("pdf_page")
+                            or page_by_type[str(record["type"])]
+                        ),
+                    ),
                     claim_assessment=(
                         "supported" if record["type"] == "claim" else None
                     ),
@@ -126,6 +146,87 @@ class SingleEvidenceAnalyzer:
         )
 
 
+class StaticReviser:
+    requires_network = False
+
+    def __init__(self, paper_id: str) -> None:
+        self.calls = 0
+        self.allowed_fields = ()
+        self.paper_id = paper_id
+
+    def revise(
+        self,
+        *,
+        skill,
+        contract,
+        entity,
+        verification_feedback,
+        allowed_fields,
+        source_contract,
+        excerpt,
+    ):
+        del skill, contract, verification_feedback
+        self.calls += 1
+        self.allowed_fields = tuple(allowed_fields)
+        self.excerpt = excerpt
+        return EvidenceRevisionDraft(
+            entity_id=str(entity["id"]),
+            entity_type=str(entity["type"]),
+            paper_id=self.paper_id,
+            reason_code="source-contradiction",
+            source_sha256=str(source_contract["sha256"]),
+            source_pages=(5,),
+            rationale=(
+                "PDF page 5 describes shifted sparse attention as a training-time "
+                "approximation with shifted token groups."
+            ),
+            updates=EvidenceRevisionUpdates(
+                definition=(
+                    "Shifted sparse attention approximates full attention during "
+                    "fine-tuning by shifting half of the attention heads across "
+                    "neighboring token groups."
+                ),
+                evidence=EvidenceLocator(
+                    pdf_page=5,
+                    section="Shifted Sparse Attention",
+                    description="The method definition and shifted grouping are stated here.",
+                ),
+            ),
+        )
+
+
+class EvidenceRevisionContractTests(unittest.TestCase):
+    @staticmethod
+    def _entity(*, gate_codes=(), history=()) -> Entity:
+        return Entity(
+            path=Path("methods/fixture.md"),
+            relative_path="methods/fixture.md",
+            metadata={
+                "schema_version": "0.2",
+                "id": "method:fixture",
+                "type": "method",
+                "status": "needs-review",
+                "revision_history": list(history),
+                "verification": {
+                    "verdict": "supported",
+                    "source_sha256": "a" * 64,
+                    "rationale": "A deterministic evidence gate retained this entity.",
+                    "gate_codes": list(gate_codes),
+                },
+            },
+            body="# Fixture",
+            links=[],
+        )
+
+    def test_stable_locator_gate_code_makes_entity_revision_eligible(self) -> None:
+        entity = self._entity(gate_codes=("locator-page-not-inspected",))
+        self.assertEqual("locator-page-mismatch", evidence_revision_reason(entity))
+
+    def test_two_revision_history_entries_exhaust_automatic_revision(self) -> None:
+        entity = self._entity(history=({"attempt": 1}, {"attempt": 2}))
+        self.assertIsNone(evidence_revision_reason(entity))
+
+
 class EvidenceVerificationPipelineTests(unittest.TestCase):
     def setUp(self) -> None:
         (REPOSITORY_ROOT / "tmp").mkdir(parents=True, exist_ok=True)
@@ -164,9 +265,31 @@ class EvidenceVerificationPipelineTests(unittest.TestCase):
             target_facets=("technical-taxonomy", "quality-metrics"),
             search_run_path="research/long-context-sparse-models/search-runs/v0-discovery.yaml",
         )
+        draft = paper_draft()
+        direct_claim = draft.claims[0].model_copy(
+            update={
+                "key": "c2",
+                "statement": (
+                    "The paper reports that short-context perplexity can degrade "
+                    "after long-context extension."
+                ),
+                "evidence_type": "author-stated",
+                "evidence": draft.claims[0].evidence.model_copy(
+                    update={
+                        "pdf_page": 7,
+                        "element": "Table 3",
+                        "description": (
+                            "The short-context degradation is reported on this page."
+                        ),
+                    }
+                ),
+                "scope": {"setting": "short-context evaluation"},
+            }
+        )
+        draft = draft.model_copy(update={"claims": draft.claims + (direct_claim,)})
         ingester = PaperIngestPipeline(
             self.settings,
-            extractor=StaticExtractor(paper_draft()),
+            extractor=StaticExtractor(draft),
             now=lambda: datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc),
         )
         self.ingest_result = ingester.ingest(self.candidate)
@@ -247,6 +370,81 @@ class EvidenceVerificationPipelineTests(unittest.TestCase):
         errors = [item for item in validate_index(index) if item.severity == "ERROR"]
         self.assertEqual([], errors)
         self.assertEqual(1, self.verifier.paper_calls)
+        self.assertTrue(
+            any(
+                record["metadata"].get("evidence_type") == "author-stated"
+                for record in self.verifier.last_entities
+            )
+        )
+        self.assertTrue({1, 2, 5, 6, 7}.issubset(
+            set(self.verifier.last_source_contract["excerpt_pages"])
+        ))
+        self.assertIn("--- PDF p. 5 ---", self.verifier.last_excerpt)
+        self.assertIn("--- PDF p. 7 ---", self.verifier.last_excerpt)
+
+    def test_verifier_feedback_is_revised_to_draft_then_independently_verified(
+        self,
+    ) -> None:
+        index = build_index(self.wiki_root, self.wiki_root / "_meta")
+        method_id = next(
+            entity_id
+            for entity_id in self.ingest_result.created_entity_ids
+            if entity_id.startswith("method:")
+        )
+        method = index.unique_entities()[method_id]
+        source_hash = hashlib.sha256(
+            (self.source_root / LONG_LORA_PDF.name).read_bytes()
+        ).hexdigest()
+        metadata = dict(method.metadata)
+        metadata["status"] = "needs-review"
+        metadata["verification"] = {
+            "skill": "verify-evidence",
+            "verdict": "contradicted",
+            "verified_at": "2026-08-27T10:00:00+00:00",
+            "source_sha256": source_hash,
+            "pdf_pages": [5],
+            "rationale": "The current definition contradicts PDF page 5.",
+            "prechecks": {},
+        }
+        WikiSourceWriter(self.wiki_root, self.wiki_root / "_meta").publish(
+            {method.relative_path: render_wiki_page(metadata, method.body)},
+            allow_overwrite=True,
+        )
+
+        snapshot = inspect_research(self.settings, "long-context-sparse-models")
+        self.assertIn(method_id, snapshot.evidence.revision_candidate_ids)
+        criteria = load_done_criteria(self.settings, "long-context-sparse-models")
+        gaps = evaluate_gaps(snapshot, criteria)
+        gap = next(item for item in gaps if item.recommended_action == "revise_evidence")
+        reviser = StaticReviser(self.ingest_result.paper_id)
+        revision = EvidenceRevisionPipeline(
+            self.settings,
+            reviser=reviser,
+            now=lambda: datetime(2026, 8, 27, 10, 30, tzinfo=timezone.utc),
+        ).revise_next(gap=gap, snapshot=snapshot)
+
+        self.assertEqual("published", revision.status)
+        self.assertEqual(("definition", "evidence"), revision.updated_fields)
+        self.assertEqual(("definition", "evidence"), reviser.allowed_fields)
+        revised = build_index(self.wiki_root).unique_entities()[method_id]
+        self.assertEqual("draft", revised.metadata["status"])
+        self.assertNotIn("verification", revised.metadata)
+        self.assertEqual(1, len(revised.metadata["revision_history"]))
+        self.assertEqual(
+            "contradicted",
+            revised.metadata["revision_history"][0]["prior_verification"]["verdict"],
+        )
+
+        after_revision = inspect_research(
+            self.settings, "long-context-sparse-models"
+        )
+        verification = self.pipeline.verify_next(
+            gap=self.verify_gap(),
+            snapshot=after_revision,
+        )
+        self.assertIn(method_id, verification.verified_entity_ids)
+        final = build_index(self.wiki_root).unique_entities()[method_id]
+        self.assertEqual("verified", final.metadata["status"])
 
     def test_verified_inputs_allow_independent_assessment_promotion(self) -> None:
         snapshot = inspect_research(self.settings, "long-context-sparse-models")

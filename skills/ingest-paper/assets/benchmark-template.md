@@ -10,6 +10,9 @@ updated_at: "{{iso_timestamp}}"
 task: "{{task}}"
 metrics: []
 source: {}
+evidence:
+  locator: "{{evidence_locator}}"
+  pdf_page: 0
 relations: {}
 ---
 

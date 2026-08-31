@@ -1,0 +1,4 @@
+interface:
+  display_name: "Revise Evidence"
+  short_description: "Repair verifier-retained Wiki evidence safely"
+  default_prompt: "Use $revise-evidence to correct one verifier-retained Wiki method or claim from the supplied PDF evidence, then leave it ready for independent re-verification."

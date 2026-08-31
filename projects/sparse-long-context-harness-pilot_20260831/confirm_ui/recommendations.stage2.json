@@ -1,0 +1,165 @@
+{
+  "stage": "stage2",
+  "lang": "zh",
+  "recommend": {
+    "delivery_purpose": "balanced",
+    "mode": "custom",
+    "visual_style": "custom",
+    "image_strategy": "custom",
+    "image_usage": ["none"],
+    "generation_mode": "continuous"
+  },
+  "page_count": {
+    "value": "16",
+    "note": "Stage 1 已确认：调研结果与工程内容约 3:2。"
+  },
+  "image_notes": {
+    "value": "不使用外部照片或 AI 图片；以可编辑 SVG 流程图、技术地图、证据表格和少量线性图标完成视觉表达。"
+  },
+  "proactive_speaker_notes": {
+    "value": true
+  },
+  "proactive_custom_animations": {
+    "value": false
+  },
+  "proactive_narration_audio": {
+    "value": false
+  },
+  "refine_spec": {
+    "value": false
+  },
+  "design_spec_depth": {
+    "value": "brief"
+  },
+  "design_directions": {
+    "selected": 0,
+    "candidates": [
+      {
+        "id": "evidence-first-minimal",
+        "name": "证据优先 · 极简技术评审",
+        "note": "推荐。按 16 页、调研结果与工程约 3:2 组织；结论先行，留白充足，用证据数字、技术地图和风险标记讲清初步发现与 Harness。",
+        "mode": "custom",
+        "mode_behavior": "以 pyramid 为叙事基底，标题直接给判断；先说明为何需要 Harness，再用架构、LoopEngineer、试运行证据和非共识结论逐层支撑，最后明确证据边界与下一轮动作。每页只保留一个主判断，过程信息放入讲者备注。",
+        "visual_style": "custom",
+        "visual_style_behavior": "以 swiss-minimal 的严格网格和大留白为主体，吸收 data-journalism 的来源线、微型数据表与意义编码。形状以锐利矩形、细规则和少量大色块为主；不使用阴影或装饰性渐变，橙色只标记风险、反例和未闭环项。",
+        "icons": "tabler-outline",
+        "color": {
+          "name": "研究蓝 + 证据橙",
+          "palette": {
+            "background": "#F8FAFC",
+            "secondary_bg": "#EAF0F6",
+            "primary": "#123B5D",
+            "accent": "#E76F2E",
+            "secondary_accent": "#2A9D8F",
+            "body_text": "#17212B"
+          }
+        },
+        "typography": {
+          "name": "微软雅黑 + Aptos",
+          "heading": {
+            "primary": "Microsoft YaHei",
+            "english": "Aptos Display",
+            "css": "sans-serif"
+          },
+          "body": {
+            "primary": "Microsoft YaHei",
+            "english": "Aptos",
+            "css": "sans-serif"
+          },
+          "body_size": 24
+        },
+        "image_strategy": {
+          "name": "网格化证据图形",
+          "rendering": "custom",
+          "visual": "可编辑的流程图、技术谱系、对比表和证据卡片，使用统一线宽与模块化网格",
+          "mood": "严谨、清楚、克制，像研究评审材料而非宣传稿",
+          "behavior": "以 minimalist-swiss 的单一线宽、纯平面和负空间为基础；所有图形严格对齐网格，不使用纹理、透视或阴影。证据用主色组织，风险与反例只用一处高对比橙色，整体保持学术而易读。"
+        }
+      },
+      {
+        "id": "engineering-blueprint",
+        "name": "系统蓝图 · 工程拆解",
+        "note": "以架构图和循环控制为视觉核心，适合偏工程的深度汇报。",
+        "mode": "custom",
+        "mode_behavior": "以 instructional 为叙事基底，按研究目标、系统部件、Agent 循环、证据验证、反馈修正和下一轮实验的依赖顺序展开。每页承担一个明确学习步骤，技术谱系与系统流程使用并列结构，帮助受众快速建立完整心智模型。",
+        "visual_style": "custom",
+        "visual_style_behavior": "以 blueprint 的工程图纸语言组织页面：深色画布、细线框、组件编号、正交连线和少量坐标标记。架构图可占据整页骨架，文字挂在引导线上；不使用重填充或营销式装饰，青色标记主路径，琥珀色标记故障与缺口。",
+        "icons": "tabler-outline",
+        "color": {
+          "name": "深海蓝图",
+          "palette": {
+            "background": "#081521",
+            "secondary_bg": "#102638",
+            "primary": "#BFE8FF",
+            "accent": "#FFB454",
+            "secondary_accent": "#38C6B4",
+            "body_text": "#EAF6FF"
+          }
+        },
+        "typography": {
+          "name": "微软雅黑 + Consolas",
+          "heading": {
+            "primary": "Microsoft YaHei",
+            "english": "Aptos Display",
+            "css": "sans-serif"
+          },
+          "body": {
+            "primary": "Microsoft YaHei",
+            "english": "Consolas",
+            "css": "sans-serif"
+          },
+          "body_size": 23
+        },
+        "image_strategy": {
+          "name": "技术蓝图图解",
+          "rendering": "custom",
+          "visual": "全页系统示意图、正交连接器、细线边框和局部放大注释",
+          "mood": "工程精确、分析导向、可追踪",
+          "behavior": "采用 blueprint 的清晰均匀线条、极低透明度网格和纯平面结构；组件使用精确矩形、锚点与直角连接器，主路径以青绿色突出，错误和阻塞点以琥珀色标记。没有纹理、渐变或透视，所有层级依靠线宽、间距和注释建立。"
+        }
+      },
+      {
+        "id": "editorial-research-log",
+        "name": "研究日志 · 编辑式复盘",
+        "note": "把一次失败—修复—验证写成研究故事，阅读感更强，适合会后独立传播。",
+        "mode": "custom",
+        "mode_behavior": "以 narrative 为叙事基底，从长上下文稀疏化的承诺开始，经过一次真实 Canary 暴露的数据与验证问题，再落到可追溯研究循环和下一步缺口。关键反例作为故事转折，Error Book 未完成作为尚未闭环的悬念，结尾给出明确修复路线。",
+        "visual_style": "custom",
+        "visual_style_behavior": "以 editorial 的杂志式分栏、细规则、引文和大号数字为主体；浅暖纸色承载长阅读感，标题与正文形成清晰角色对比。页面可用非对称列和证据旁注打破机械网格，但保持低装饰、无重阴影，红棕色仅用于反例和问题。",
+        "icons": "tabler-outline",
+        "color": {
+          "name": "研究手记",
+          "palette": {
+            "background": "#FBF7F0",
+            "secondary_bg": "#EFE7DB",
+            "primary": "#243447",
+            "accent": "#B9563F",
+            "secondary_accent": "#557C70",
+            "body_text": "#252422"
+          }
+        },
+        "typography": {
+          "name": "微软雅黑 + Georgia",
+          "heading": {
+            "primary": "Microsoft YaHei",
+            "english": "Georgia",
+            "css": "serif"
+          },
+          "body": {
+            "primary": "Microsoft YaHei",
+            "english": "Aptos",
+            "css": "sans-serif"
+          },
+          "body_size": 24
+        },
+        "image_strategy": {
+          "name": "编辑式研究图解",
+          "rendering": "custom",
+          "visual": "不依赖照片，以大号数字、细分栏、引文、时间线与限定色信息图构成研究叙事",
+          "mood": "理性、克制、有复盘感，适合会后阅读",
+          "behavior": "采用 editorial 的精细分隔线、扁平色块和有节奏的负空间；线条细而准确，层次来自排版与色块叠放而非阴影。整体使用有限色彩，红棕强调反例与错误，图形像经过编辑审校的研究刊物。"
+        }
+      }
+    ]
+  }
+}

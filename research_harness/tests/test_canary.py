@@ -39,7 +39,9 @@ def _sha256(path: Path) -> str:
 
 
 class FakeExecutor:
-    supported_actions = frozenset({"search"})
+    supported_actions = frozenset(
+        {"search", "ingest", "verify", "revise_evidence", "analyze_claims"}
+    )
 
     def __init__(self, *, fail: bool = False):
         self.fail = fail
@@ -48,7 +50,7 @@ class FakeExecutor:
         decision = kwargs["decision"]
         return ResearchActionResult(
             action_id=kwargs["action_id"],
-            action="search",
+            action=decision.action,
             target_gap_id=decision.target_gap_id,
             status="partial" if self.fail else "success",
             outcome="tool_failure" if self.fail else "positive",
@@ -188,6 +190,33 @@ class CanaryTests(unittest.TestCase):
             )
         self.assertEqual(state["stage_reached"], "not-started")
         self.assertEqual(state["action_results"][-1]["outcome"], "tool_failure")
+
+    def test_revision_boundaries_skip_without_actionable_feedback(self) -> None:
+        limits = CanaryLimits(stop_after="reverification", max_actions=5)
+        isolated, _, run_path = prepare_canary_workspace(
+            self.settings,
+            research_id="long-context-sparse-models",
+            run_id=self.run_id,
+            limits=limits,
+        )
+        with HarnessPersistence(isolated) as persistence:
+            graph = _build_canary_graph(
+                settings=isolated,
+                research_id="long-context-sparse-models",
+                run_path=run_path,
+                limits=limits,
+                executor=FakeExecutor(),
+                persistence=persistence,
+            )
+            state = graph.invoke(
+                {"research_id": "long-context-sparse-models"},
+                {"configurable": {"thread_id": f"canary:{self.run_id}"}},
+            )
+        self.assertEqual("reverification", state["stage_reached"])
+        self.assertEqual(
+            ["search", "ingest", "verify"],
+            [item["action"] for item in state["action_results"]],
+        )
 
     def test_semantic_artifact_is_immutable_and_manifest_is_separate(self) -> None:
         root = REPOSITORY_ROOT / ".harness" / "canary" / self.run_id

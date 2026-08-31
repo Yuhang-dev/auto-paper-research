@@ -9,7 +9,15 @@ created_at: "{{iso_timestamp}}"
 updated_at: "{{iso_timestamp}}"
 statement: "{{statement}}"
 assessment: open
-scope: {}
+attribution: "{{attribution}}"
+evidence_type: "{{evidence_type}}"
+evidence_status: "{{evidence_status}}"
+evidence:
+  locator: "{{evidence_locator}}"
+  pdf_page: 0
+source_paper: "paper:{{paper_slug}}"
+scope:
+  setting: "{{supported_scope_setting}}"
 relations: {}
 ---
 

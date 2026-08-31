@@ -8,8 +8,10 @@ from .config import HarnessSettings
 from .graph import ResearchHarness
 from .ingest_models import IngestCandidate, PaperIngestDraft, PaperIngestResult
 from .evidence_verification import EvidenceVerificationPipeline
+from .evidence_revision import EvidenceRevisionPipeline
 from .nonconsensus_analysis import NonConsensusAnalysisPipeline
-from .paper_ingest import PaperIngestPipeline
+from .paper_ingest import PaperIngestPipeline, StagedWikiPublisher
+from .staged_ingest import StagedPaperRecord, StagedPaperStore
 from .search_runtime import SearchRuntime
 from .research_control import AutonomousResearchController, ResearchController
 from .research_models import (
@@ -27,7 +29,11 @@ __all__ = [
     "HarnessSettings",
     "ResearchHarness",
     "PaperIngestPipeline",
+    "StagedWikiPublisher",
+    "StagedPaperRecord",
+    "StagedPaperStore",
     "EvidenceVerificationPipeline",
+    "EvidenceRevisionPipeline",
     "NonConsensusAnalysisPipeline",
     "SearchRuntime",
     "PaperIngestDraft",

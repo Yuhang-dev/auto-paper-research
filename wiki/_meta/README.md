@@ -20,10 +20,12 @@ deterministic, rebuildable indexes.
 Every current-schema page uses `schema_version: "0.2"` and a stable canonical
 ID such as `paper:longlora`. File paths are storage locations, not identity.
 
-Evidence-bearing `paper`, `experiment`, and `claim` pages may declare a
-controlled `facets` list. A verified page contributes covered evidence; a draft
-page contributes partial evidence. Search-run candidate coverage is a separate
-process signal and never satisfies Wiki evidence coverage.
+Evidence-bearing pages may declare a controlled `facets` list. Newly ingested
+methods, benchmarks, models, claims, and experiments preserve page-aware
+`evidence` locators so verification can assemble the cited PDF pages. A verified
+page contributes covered evidence; a draft page contributes partial evidence.
+Search-run candidate coverage is a separate process signal and never satisfies
+Wiki evidence coverage.
 
 ## Links and relations
 
@@ -40,6 +42,11 @@ target types are defined in `relation-types.yaml`.
 Body links are navigational. They do not by themselves assert that an
 experiment supports a claim.
 
+`states` links a paper to an author-stated claim. `compares_against` links an
+experiment to baseline methods without implying that the paper proposed them.
+Experiment-supported claims still require `supports` or `contradicts` evidence
+edges; a paper `states` edge is not a substitute for quantitative evidence.
+
 ## Status
 
 `status` is lifecycle state:
@@ -53,6 +60,11 @@ experiment supports a claim.
 `needs-review` is an ingested source page with unresolved identity, source access,
 or central evidence. Like `draft`, it contributes partial rather than verified
 evidence coverage.
+
+When `revise-evidence` corrects actionable verifier feedback, it preserves the
+old `verification` mapping inside append-only `revision_history`, resets the page
+to `draft`, and requires a fresh independent verification pass. Automatic
+revision is capped at two history entries per entity.
 
 Claim epistemic state belongs in the claim page's `assessment` field:
 

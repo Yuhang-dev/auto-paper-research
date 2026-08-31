@@ -644,7 +644,43 @@ def _validate_verified(entity: Entity, index: WikiIndex) -> List[Diagnostic]:
             )
 
     minimum_edges = index.schema.verified_minimum_evidence_edges(entity_type)
-    if minimum_edges:
+    direct_author_claim = (
+        entity_type == "claim"
+        and entity.metadata.get("evidence_type") == "author-stated"
+    )
+    if minimum_edges and direct_author_claim:
+        missing = [
+            field
+            for field in (
+                "attribution",
+                "evidence_status",
+                "evidence.locator",
+                "evidence.pdf_page",
+                "source_paper",
+            )
+            if not has_meaningful_value(entity.metadata, field)
+        ]
+        source_edges = [
+            edge
+            for edge in index.edges
+            if edge.target == entity.entity_id and edge.relation == "states"
+        ]
+        if (
+            missing
+            or entity.metadata.get("attribution") != "author"
+            or entity.metadata.get("evidence_status") != "located"
+            or not source_edges
+        ):
+            diagnostics.append(
+                _diagnostic(
+                    "ERROR",
+                    "verified_claim_missing_direct_evidence",
+                    "Verified author-stated claim requires located direct evidence and a structured source-paper edge.",
+                    entity=entity,
+                    field=",".join(missing) or "source_paper",
+                )
+            )
+    elif minimum_edges:
         evidence_edges = [
             edge
             for edge in index.edges
@@ -708,12 +744,23 @@ def _validate_graph_advisories(index: WikiIndex) -> List[Diagnostic]:
                 if edge.target == entity_id
                 and edge.relation in {"supports", "contradicts"}
             ]
-            if not evidence:
+            direct_author_claim = (
+                entity.metadata.get("evidence_type") == "author-stated"
+                and entity.metadata.get("attribution") == "author"
+                and entity.metadata.get("evidence_status") == "located"
+                and has_meaningful_value(entity.metadata, "evidence.locator")
+                and has_meaningful_value(entity.metadata, "evidence.pdf_page")
+                and any(
+                    edge.target == entity_id and edge.relation == "states"
+                    for edge in index.edges
+                )
+            )
+            if not evidence and not direct_author_claim:
                 diagnostics.append(
                     _diagnostic(
                         "WARNING",
                         "claim_lacks_evidence",
-                        "Claim has no supporting or contradicting experiment edge.",
+                        "Claim has neither experiment evidence nor complete direct author evidence.",
                         entity=entity,
                     )
                 )

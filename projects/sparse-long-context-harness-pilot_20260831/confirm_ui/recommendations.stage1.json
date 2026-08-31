@@ -1,0 +1,29 @@
+{
+  "stage": "stage1",
+  "lang": "zh",
+  "primary_language": "zh-CN",
+  "recommend": {
+    "canvas": "ppt169"
+  },
+  "audience": {
+    "value": "课题负责人、研究与工程团队，以及需要审阅该方案的导师或技术负责人"
+  },
+  "communication_intent": {
+    "value": "以调研结果与工程实现约 3:2 的篇幅，先展示技术谱系、初步证据、非共识线索和开源缺口，再说明 Harness、LoopEngineer 与 Error Book 的工程状态。"
+  },
+  "audience_outcome": {
+    "value": "受众能够先理解稀疏长上下文方向的当前发现与证据边界，再判断 Harness 工程是否足以支撑下一轮定向调研。"
+  },
+  "core_message": {
+    "value": "首期价值不在于一次生成综述，而在于建立可追溯的研究循环：Skill 约束、确定性脚本执行、结构化 Wiki 存证、独立验证和 Error Book 反馈共同收敛。"
+  },
+  "delivery_context": {
+    "value": "主讲的 12–15 分钟技术/课题评审；会后作为可独立阅读的项目记录。"
+  },
+  "artifact_afterlife": {
+    "value": "首期 Harness 架构与试运行基线，用于后续迭代、评审和交接。"
+  },
+  "content_divergence": {
+    "value": "可重组现有材料以形成清晰叙事，但不扩展未经证据验证的研究结论。"
+  }
+}

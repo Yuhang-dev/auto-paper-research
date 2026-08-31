@@ -258,7 +258,13 @@ class SkillRegistryTests(HarnessTestCase):
     def test_registry_discovers_and_parses_repository_skills(self) -> None:
         registry = SkillRegistry(self.settings.skills_root)
         self.assertEqual(
-            ("analyze-claims", "ingest-paper", "search-paper", "verify-evidence"),
+            (
+                "analyze-claims",
+                "ingest-paper",
+                "revise-evidence",
+                "search-paper",
+                "verify-evidence",
+            ),
             registry.names,
         )
 
@@ -315,7 +321,13 @@ class SkillRegistryTests(HarnessTestCase):
             model=ScriptedModel([AIMessage(content="unused")]),
         )
         self.assertEqual(
-            ("analyze-claims", "ingest-paper", "search-paper", "verify-evidence"),
+            (
+                "analyze-claims",
+                "ingest-paper",
+                "revise-evidence",
+                "search-paper",
+                "verify-evidence",
+            ),
             harness.skill_registry.names,
         )
         self.assertFalse(hasattr(harness, "skill_router"))
@@ -1435,7 +1447,7 @@ class HarnessCliTests(HarnessTestCase):
             )
         listed = json.loads(list_output.getvalue())
         self.assertEqual(0, list_exit)
-        self.assertEqual(4, listed["count"])
+        self.assertEqual(5, listed["count"])
 
         show_output = io.StringIO()
         with redirect_stdout(show_output):

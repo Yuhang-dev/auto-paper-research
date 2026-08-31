@@ -1,0 +1,53 @@
+{
+  "roles": {
+    "body": {
+      "family": "\"Microsoft YaHei\", Aptos, Arial, sans-serif",
+      "size": 24.0,
+      "cjk_chars_per_100px": 3.9,
+      "latin_chars_per_100px": 8.1,
+      "longest_planned_line": {
+        "px": 3583.1,
+        "slide": "P16",
+        "text": "Research：Q03 TTFT/latency · Q04 decode …"
+      }
+    },
+    "title": {
+      "family": "\"Microsoft YaHei\", \"Aptos Display\", Arial, sans-serif",
+      "size": 42.0,
+      "cjk_chars_per_100px": 2.2,
+      "latin_chars_per_100px": 4.6,
+      "longest_planned_line": {
+        "px": 1317.8,
+        "slide": "P04",
+        "text": "当前证据集中在静态训练期分支，动态 prefill 与 decode 仍缺样本"
+      }
+    },
+    "subtitle": {
+      "family": "\"Microsoft YaHei\", \"Aptos Display\", Arial, sans-serif",
+      "size": 32.0,
+      "cjk_chars_per_100px": 2.9,
+      "latin_chars_per_100px": 6.1,
+      "longest_planned_line": {
+        "px": 1853.0,
+        "slide": "P16",
+        "text": "研究侧补动态 prefill、KV/token、kernel 和失败基线；工程…"
+      }
+    },
+    "annotation": {
+      "family": "\"Microsoft YaHei\", Aptos, Arial, sans-serif",
+      "size": 18.0,
+      "cjk_chars_per_100px": 5.2,
+      "latin_chars_per_100px": 10.8,
+      "longest_planned_line": null
+    },
+    "footer": {
+      "family": "\"Microsoft YaHei\", Aptos, Arial, sans-serif",
+      "size": 14.0,
+      "cjk_chars_per_100px": 6.7,
+      "latin_chars_per_100px": 13.9,
+      "longest_planned_line": null
+    }
+  },
+  "source": "spec_lock.md",
+  "generated_at": "2026-08-30T17:59:38Z"
+}
