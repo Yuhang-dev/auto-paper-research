@@ -25,6 +25,7 @@ from research_harness.review_logic import (
     analyze_review_gaps,
     build_review_coverage,
     build_source_relation_candidates,
+    formal_wiki_paper_identities,
     merge_sources,
     sanitize_provisional_skim,
     select_for_deep_read,
@@ -976,7 +977,7 @@ class ReviewLoopTests(unittest.TestCase):
             all(item.uncertainty_id in {"gap:1", "gap:2", "gap:3"} for item in plan.queries)
         )
 
-    def test_fuzzy_same_work_is_a_candidate_and_never_auto_merged(self):
+    def test_fuzzy_same_work_remains_a_candidate(self):
         left = _paper_source(
             1,
             title="Dynamic Sparse Attention for Long Context",
@@ -1013,7 +1014,7 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertTrue(all(item.status == "candidate" for item in relations))
         self.assertTrue(all(item.provisional for item in relations))
 
-    def test_gap_analyzer_uses_evidence_coverage_not_topology_alone(self):
+    def test_gap_analyzer_prioritizes_evidence_coverage(self):
         source = _paper_source(1)
         skim = SourceSkim(
             source_id=source.source_id,
@@ -1055,7 +1056,6 @@ class ReviewLoopTests(unittest.TestCase):
         )
         gaps = analyze_review_gaps(
             scope_title=self.scope.title,
-            required_facets=FACETS,
             sources=(source,),
             skims=(skim,),
             cards=(card,),
@@ -1169,6 +1169,14 @@ class ReviewLoopTests(unittest.TestCase):
             existing_paper_identities=(f"arxiv:{source.arxiv_id}",),
         )
         self.assertEqual((), skipped.items)
+
+    def test_invalid_wiki_paper_frontmatter_reports_the_file(self):
+        paper_root = self.root / "wiki" / "papers"
+        paper_root.mkdir(parents=True, exist_ok=True)
+        invalid_page = paper_root / "invalid.md"
+        invalid_page.write_text("# Missing frontmatter\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, r"invalid\.md"):
+            formal_wiki_paper_identities(self.root / "wiki")
 
     def test_same_paper_configurations_cannot_be_cross_paper_consensus(self):
         digest = "a" * 64

@@ -263,7 +263,6 @@ def _refresh_review_analysis(
     )
     gaps = analyze_review_gaps(
         scope_title=scope.title,
-        required_facets=scope.required_facets,
         sources=sources,
         skims=skims,
         cards=cards,
@@ -436,9 +435,8 @@ def _provider_limits(
     global_remaining = max(0, config.max_sources - len(sources))
     reallocation_share = 0
     if round_number > 1 and active_source_types and global_remaining:
-        # Source quotas are soft. Starting in round two, every queried source
-        # type receives a small share of the still-unfilled global budget so a
-        # failed or exhausted first-round provider cannot strand the funnel.
+        # Source quotas are soft. Starting in round two, queried source types
+        # share the remaining global budget and keep the funnel moving.
         reallocation_share = math.ceil(
             global_remaining / rounds_left / len(active_source_types)
         )
@@ -803,8 +801,8 @@ def build_review_graph(
                 async with semaphore:
                     enriched = await providers.enrich_source(source)
             except Exception as exc:
-                # S2 metadata is supplementary. A failure must never block the
-                # authoritative PDF acquisition or evidence path.
+                # S2 enrichment is optional metadata; PDF acquisition remains the
+                # authoritative evidence path.
                 enrichment_error = exc
             material = store.material(source.source_id)
             if material is not None:

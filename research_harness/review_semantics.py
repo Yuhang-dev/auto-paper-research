@@ -586,7 +586,7 @@ class LangChainReviewSemanticEngine:
                 ],
                 "constraints": {
                     "return_exact_source_ids": True,
-                    "do_not_infer_results": True,
+                    "evidence_scope": "metadata-screening-only",
                 },
             },
             repair_once=True,
@@ -625,8 +625,8 @@ class LangChainReviewSemanticEngine:
             SourceSkim,
             system=_skill_system(
                 skill,
-                "Produce a compact provisional skim. Findings from this step are never "
-                "citation-eligible.",
+                "Produce a compact provisional skim for navigation. EvidenceCards "
+                "supply report citations.",
             ),
             payload={
                 "task": "Skim one source for review navigation.",
@@ -813,8 +813,8 @@ class LangChainReviewSemanticEngine:
                 continue
             locator = item.locator
             if material.media_type == "web-content":
-                # Static page extraction cannot establish table/figure results,
-                # and page-level author summaries are not experimental evidence.
+                # Static pages contribute the claims and locators present in their
+                # captured text; experimental cards require matching source detail.
                 if not _web_card_supported(item, material):
                     omitted_cards += 1
                     continue
@@ -951,7 +951,7 @@ class LangChainReviewSemanticEngine:
                     "allowed_evidence_card_ids": [item.card_id for item in cards],
                     "comparison_consensus_or_contradiction_requires_two_independent_sources": True,
                     "single_source_claim_kind": "single-source-observation",
-                    "do_not_write_markdown": True,
+                    "output_format": "structured-synthesis-draft",
                 },
             },
             repair_once=True,
@@ -973,7 +973,7 @@ def _downgrade_statement(
     source_ids = {cards[card_id].source_id for card_id in known_ids}
     update: dict[str, Any] = {"evidence_card_ids": known_ids}
     if item.claim_kind != "single-source-observation" and len(source_ids) < 2:
-        limitation = "仅有一个独立来源，已降级为单篇观察，不能视为共识或矛盾。"
+        limitation = "证据来自一个独立来源，本条按单篇观察呈现。"
         update.update(
             {
                 "claim_kind": "single-source-observation",
@@ -1083,7 +1083,7 @@ def render_review_markdown(
         "",
         f"# {draft.title or scope.title}",
         "",
-        "> 本报告由 Fast Research Loop 生成。Skim 仅用于筛选；正文事实只引用 EvidenceCard。",
+        "> 本报告由 Fast Research Loop 生成。Skim 负责筛选，EvidenceCard 支撑正文事实。",
         "",
         "## 1. 核心结论",
         "",
@@ -1202,7 +1202,7 @@ def render_review_markdown(
 
 def build_technology_map(
     *,
-    sources: Sequence[SourceRecord] = (),
+    sources: Sequence[SourceRecord],
     skims: Sequence[SourceSkim],
     cards: Sequence[EvidenceCard],
 ) -> dict[str, Any]:
@@ -1256,7 +1256,7 @@ def build_promotion_manifest(
     sources: Sequence[SourceRecord],
     cards: Sequence[EvidenceCard],
     created_at: str,
-    draft: Optional[ReviewSynthesisDraft] = None,
+    draft: ReviewSynthesisDraft,
     claims: Sequence[UnderstandingClaim] = (),
     uncertainties: Sequence[ResearchUncertainty] = (),
     assessments: Sequence[NonConsensusAssessment] = (),
@@ -1272,17 +1272,16 @@ def build_promotion_manifest(
         )
     by_source = {item.source_id: item for item in sources}
     report_card_ids: set[str] = set()
-    if draft is not None:
-        for item in (
-            *draft.core_findings,
-            *draft.task_and_performance,
-            *draft.engineering_bottlenecks,
-        ):
-            report_card_ids.update(item.evidence_card_ids)
-        for item in draft.taxonomy:
-            report_card_ids.update(item.evidence_card_ids)
-        for item in draft.projects:
-            report_card_ids.update(item.evidence_card_ids)
+    for item in (
+        *draft.core_findings,
+        *draft.task_and_performance,
+        *draft.engineering_bottlenecks,
+    ):
+        report_card_ids.update(item.evidence_card_ids)
+    for item in draft.taxonomy:
+        report_card_ids.update(item.evidence_card_ids)
+    for item in draft.projects:
+        report_card_ids.update(item.evidence_card_ids)
     claim_card_ids = {
         card_id
         for item in claims

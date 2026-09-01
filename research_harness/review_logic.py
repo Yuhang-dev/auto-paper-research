@@ -549,21 +549,21 @@ def validate_nonconsensus_assessment(
     declared_sources = set(assessment.independent_source_ids)
     if actual_sources != declared_sources:
         raise ValueError(
-            f"assessment {assessment.assessment_id} independent sources do not "
-            "match its EvidenceCards"
+            f"assessment {assessment.assessment_id} must list the source IDs "
+            "referenced by its EvidenceCards"
         )
     if assessment.result in {"supported-consensus", "contested"} and len(
         actual_sources
     ) < 2:
         raise ValueError(
-            "same-paper methods or configurations cannot establish cross-paper consensus"
+            "cross-paper consensus requires at least two independent source IDs"
         )
     if assessment.result in {"supported-consensus", "contested"}:
         referenced_cards = [cards[item] for item in referenced]
         if not _has_comparable_cross_source_pair(referenced_cards):
             raise ValueError(
-                "consensus or contested evidence lacks a deterministically comparable "
-                "cross-source experiment pair"
+                "consensus and contested assessments require a comparable "
+                "cross-source experiment pair with aligned conditions"
             )
 
 
@@ -700,7 +700,6 @@ def build_review_coverage(
 def analyze_review_gaps(
     *,
     scope_title: str,
-    required_facets: Sequence[str],
     sources: Sequence[SourceRecord],
     skims: Sequence[SourceSkim],
     cards: Sequence[EvidenceCard],
@@ -710,9 +709,8 @@ def analyze_review_gaps(
     coverage: ReviewCoverageMatrix,
     current_year: Optional[int] = None,
 ) -> Tuple[ReviewGap, ...]:
-    """Derive actionable research gaps from evidence state, never graph shape alone."""
+    """Derive actionable research gaps from located evidence and open questions."""
 
-    del required_facets
     year = current_year or datetime.now(timezone.utc).year
     cards_by_id = {item.card_id: item for item in cards}
     sources_by_id = {item.source_id: item for item in sources}
@@ -918,13 +916,13 @@ def formal_wiki_paper_identities(wiki_root: Path) -> frozenset[str]:
         text = path.read_text(encoding="utf-8-sig")
         match = re.match(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n", text, re.DOTALL)
         if not match:
-            continue
+            raise ValueError(f"Wiki paper page is missing YAML frontmatter: {path}")
         try:
             payload = yaml.safe_load(match.group(1)) or {}
-        except yaml.YAMLError:
-            continue
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Wiki paper frontmatter is invalid: {path}") from exc
         if not isinstance(payload, Mapping):
-            continue
+            raise ValueError(f"Wiki paper frontmatter must be a mapping: {path}")
         paper_id = str(payload.get("id") or "").strip()
         if paper_id:
             identities.add(paper_id)
@@ -937,8 +935,8 @@ def formal_wiki_paper_identities(wiki_root: Path) -> frozenset[str]:
                     identities.add(f"arxiv:{canonical_arxiv_id(arxiv)}")
                 if doi:
                     identities.add(f"doi:{canonical_doi(doi)}")
-            except ValueError:
-                continue
+            except ValueError as exc:
+                raise ValueError(f"Wiki paper identifier is invalid: {path}") from exc
     return frozenset(identities)
 
 
@@ -1009,7 +1007,7 @@ def review_readiness(
 
 
 def search_saturated(round_gains: Sequence[Mapping[str, object]]) -> bool:
-    """Require two consecutive no-information rounds, never a paper-count threshold."""
+    """Detect saturation from two consecutive rounds without information gain."""
 
     if len(round_gains) < 2:
         return False
