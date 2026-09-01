@@ -12,6 +12,8 @@ from typing import Any, Dict, Literal, Mapping, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .text_normalization import normalize_data
+
 
 ReviewProfile = Literal["smoke", "standard"]
 SourceType = Literal["paper", "project", "web"]
@@ -70,6 +72,11 @@ ReviewGapKind = Literal[
 
 class ReviewModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_external_text(cls, value: Any) -> Any:
+        return normalize_data(value)
 
 
 class ReviewRunConfig(ReviewModel):

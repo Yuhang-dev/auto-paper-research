@@ -35,6 +35,7 @@ from .review_models import (
     TrajectoryEvent,
     UnderstandingClaim,
 )
+from .text_normalization import normalize_data, normalize_text
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -62,7 +63,7 @@ def _atomic_text(path: Path, content: str) -> None:
             prefix=f".{path.name}.",
             suffix=".tmp",
         ) as handle:
-            handle.write(content)
+            handle.write(normalize_text(content))
             temporary = Path(handle.name)
         os.replace(temporary, path)
         temporary = None
@@ -83,14 +84,14 @@ def _json_payload(value: Any) -> Any:
 
 def _atomic_json(path: Path, value: Any) -> None:
     rendered = json.dumps(
-        _json_payload(value), ensure_ascii=False, indent=2, sort_keys=True
+        normalize_data(_json_payload(value)), ensure_ascii=False, indent=2, sort_keys=True
     ) + "\n"
     _atomic_text(path, rendered)
 
 
 def _atomic_yaml(path: Path, value: Any) -> None:
     rendered = yaml.safe_dump(
-        _json_payload(value),
+        normalize_data(_json_payload(value)),
         allow_unicode=True,
         sort_keys=False,
         default_flow_style=False,
@@ -100,7 +101,7 @@ def _atomic_yaml(path: Path, value: Any) -> None:
 
 def _atomic_jsonl(path: Path, values: Iterable[Any]) -> None:
     lines = [
-        json.dumps(_json_payload(item), ensure_ascii=False, sort_keys=True)
+        json.dumps(normalize_data(_json_payload(item)), ensure_ascii=False, sort_keys=True)
         for item in values
     ]
     _atomic_text(path, "\n".join(lines) + ("\n" if lines else ""))

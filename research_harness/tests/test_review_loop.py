@@ -359,6 +359,17 @@ class ReviewLoopTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
+    def test_unpaired_surrogate_is_normalized_before_review_artifacts(self):
+        source = _paper_source(1, title="Sparse \ud835 attention")
+        self.assertEqual("Sparse \ufffd attention", source.title)
+        config = self._config(run_id="unicode-run", thread_id="unicode-thread")
+        store = ReviewArtifactStore(self.settings, config)
+        store.initialize()
+        store.write_sources((source,))
+        rendered = store.sources_path.read_text(encoding="utf-8")
+        self.assertIn("Sparse \ufffd attention", rendered)
+        rendered.encode("utf-8")
+
     def _config(self, run_id="smoke-run", thread_id="smoke-thread"):
         return ReviewRunConfig.for_profile(
             research_id=self.scope.research_id,

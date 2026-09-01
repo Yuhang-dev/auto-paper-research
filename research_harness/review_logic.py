@@ -31,6 +31,7 @@ from .review_models import (
     SourceType,
     UnderstandingClaim,
 )
+from .text_normalization import normalize_data
 
 
 TRACKING_QUERY_PREFIXES = ("utm_",)
@@ -243,7 +244,12 @@ def _source_identities(source: SourceRecord) -> set[str]:
 
 
 def stable_id(prefix: str, *parts: object, length: int = 20) -> str:
-    payload = json.dumps(parts, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(
+        normalize_data(parts),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:length]
     return f"{prefix}-{digest}"
 

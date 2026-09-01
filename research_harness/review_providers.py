@@ -40,6 +40,7 @@ from .review_models import (
     SourceMaterial,
     SourceRecord,
 )
+from .text_normalization import normalize_data, normalize_text
 
 
 MAX_WEB_BYTES = 5 * 1024 * 1024
@@ -53,7 +54,10 @@ ALLOWED_WEB_CONTENT = (
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    rendered = normalize_text(
+        json.dumps(normalize_data(payload), ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n"
+    )
     temporary: Optional[Path] = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -788,7 +792,7 @@ class ReviewProviderRegistry:
     def _query_cache_path(self, query: RetrievalQuery) -> Path:
         digest = hashlib.sha256(
             json.dumps(
-                query.model_dump(mode="json"),
+                normalize_data(query.model_dump(mode="json")),
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -814,9 +818,9 @@ class ReviewProviderRegistry:
             self._query_cache_path(query),
             {
                 "schema_version": "0.1",
-                "query": query.model_dump(mode="json"),
+                "query": normalize_data(query.model_dump(mode="json")),
                 "provider": query.provider,
-                "sources": [item.model_dump(mode="json") for item in sources],
+                "sources": [normalize_data(item.model_dump(mode="json")) for item in sources],
             },
         )
 
@@ -929,9 +933,9 @@ class ReviewProviderRegistry:
                     "updated_at": source.updated_at,
                     **source.metadata,
                 }
-            text = (
+            text = normalize_text(
                 "GITHUB OFFICIAL METADATA\n"
-                + json.dumps(audit, ensure_ascii=False, indent=2, sort_keys=True)
+                + json.dumps(normalize_data(audit), ensure_ascii=False, indent=2, sort_keys=True)
                 + "\n\nREADME\n"
                 + str(readme)
             )
@@ -943,9 +947,9 @@ class ReviewProviderRegistry:
                 text=text[:80_000],
                 acquired_at=acquired_at,
             )
-        text = source.content_preview or await asyncio.to_thread(
+        text = normalize_text(source.content_preview or await asyncio.to_thread(
             _fetch_static_web, source.canonical_url
-        )
+        ))
         if not text.strip():
             raise ValueError("web source returned no readable content")
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()

@@ -47,6 +47,7 @@ from .review_models import (
     validate_synthesis_references,
 )
 from .skill_registry import SkillRegistry, SkillSpec
+from .text_normalization import normalize_data, normalize_text
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -165,12 +166,12 @@ class ReviewSemanticEngine(Protocol):
 
 def _payload(value: Any) -> Any:
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
+        return normalize_data(value.model_dump(mode="json"))
     if isinstance(value, Mapping):
         return {str(key): _payload(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_payload(item) for item in value]
-    return value
+    return normalize_data(value)
 
 
 def _invoke_structured(
@@ -187,7 +188,9 @@ def _invoke_structured(
         SystemMessage(content=system),
         HumanMessage(
             content=json.dumps(
-                {**payload, "output_json_schema": schema.model_json_schema()},
+                normalize_data(
+                    {**payload, "output_json_schema": schema.model_json_schema()}
+                ),
                 ensure_ascii=False,
                 indent=2,
             )
@@ -232,13 +235,15 @@ def _invoke_structured(
         ),
         HumanMessage(
             content=json.dumps(
-                {
-                    "task": f"Repair the previous {schema.__name__} output.",
-                    "validation_errors": validation_errors,
-                    "repair_limits": dict(repair_limits or {}),
-                    "original_output": repair_source,
-                    "output_json_schema": schema.model_json_schema(),
-                },
+                normalize_data(
+                    {
+                        "task": f"Repair the previous {schema.__name__} output.",
+                        "validation_errors": validation_errors,
+                        "repair_limits": dict(repair_limits or {}),
+                        "original_output": repair_source,
+                        "output_json_schema": schema.model_json_schema(),
+                    }
+                ),
                 ensure_ascii=False,
                 indent=2,
             )
@@ -248,7 +253,7 @@ def _invoke_structured(
         return invoke_once(repair_messages)
     except (OutputParserException, ValidationError) as repair_error:
         _source, repair_errors = _structured_failure_details(schema, repair_error)
-        compact = json.dumps(repair_errors[:8], ensure_ascii=False)
+        compact = normalize_text(json.dumps(repair_errors[:8], ensure_ascii=False))
         raise ValueError(
             f"{schema.__name__} output failed initial validation and one repair: "
             f"{compact}"
