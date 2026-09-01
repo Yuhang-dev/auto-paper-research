@@ -223,6 +223,42 @@ python -B -m research_harness research review synthesize `
   long-context-sparse-models --thread "sparse-review-standard-v1"
 ```
 
+### 8.1 运行进度与心跳
+
+`start`、`canary`、`resume` 和 `synthesize` 共用同一个进度器。交互式终端默认每秒
+覆盖同一行：
+
+```text
+[deep-read] 3/10 · Evidence extraction: <paper title> · 01:42...
+```
+
+点号循环表示进程仍在运行；计数或标题变化表示任务取得了结构化进展。阶段切换时保留
+一条完成记录，随后在新的一行继续。进度写到 stderr，`--format json` 的 stdout
+仍可安全重定向或交给脚本解析。
+
+持久化心跳位于：
+
+```text
+.harness/review-runs/<run-id>/state/progress.json
+```
+
+它包含 `status`、`stage`、`detail`、完成数、总数、总耗时、阶段耗时、
+`heartbeat_at`、`last_progress_at` 和 `seconds_since_progress`。因此可以区分“进程仍
+存活”和“最近一次结构化进展”。另一个终端执行 `research review status` 时，返回值
+中的 `progress` 就是该快照。
+
+显示模式通过 `.env.local` 设置：
+
+```text
+HARNESS_PROGRESS=auto   # TTY 单行刷新；重定向时每 30 秒写一条 stderr 日志
+HARNESS_PROGRESS=live  # 强制单行刷新
+HARNESS_PROGRESS=plain # 阶段变化或每 30 秒打印一行
+HARNESS_PROGRESS=off   # 关闭终端输出，仍更新 progress.json
+```
+
+单行刷新比累积一长串 `...` 更容易阅读，也不会让长任务刷满终端。PDF 解析器等第三方
+库偶尔写入 stderr 时，下一次心跳会重新绘制当前状态。
+
 `resume` 默认使用 `replan`：重新读取 run artifacts 后继续，并复用已完成的
 source/skim/material/card。只有需要精确执行 LangGraph pending node 时才显式传
 `--mode checkpoint`。

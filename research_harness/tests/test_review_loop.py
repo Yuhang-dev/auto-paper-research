@@ -82,6 +82,28 @@ NOW = "2026-08-31T00:00:00Z"
 FACETS = ("technical-taxonomy", "latency-throughput")
 
 
+class RecordingProgress:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def update(
+        self,
+        *,
+        stage: str,
+        detail: str,
+        completed: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        self.events.append(
+            {
+                "stage": stage,
+                "detail": detail,
+                "completed": completed,
+                "total": total,
+            }
+        )
+
+
 def _discovery(query_id: str, rank: int = 1) -> DiscoveryRecord:
     return DiscoveryRecord(
         query_id=query_id,
@@ -1272,6 +1294,7 @@ class ReviewLoopTests(unittest.TestCase):
     def test_offline_review_generates_cited_report_without_wiki_writes(self):
         config = self._config()
         engine = FakeReviewEngine()
+        progress = RecordingProgress()
         wiki_before = (self.root / "wiki" / "sentinel.md").read_bytes()
         with ReviewController(
             self.settings,
@@ -1279,6 +1302,7 @@ class ReviewLoopTests(unittest.TestCase):
             scope=self.scope,
             semantic_engine=engine,
             providers=self._providers(config),
+            progress=progress,
         ) as controller:
             state = controller.start()
             resumed = controller.resume(mode="checkpoint")
@@ -1300,6 +1324,19 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertIn("facet_coverage", status["research_map"])
         self.assertIn("top_unresolved_gaps", status["research_map"])
         self.assertIn("coverage_matrix", status["paths"])
+        self.assertIsNone(status["progress"])
+        stages = {str(item["stage"]) for item in progress.events}
+        self.assertTrue(
+            {
+                "retrieval",
+                "screening",
+                "skim",
+                "reasoning",
+                "deep-read",
+                "assessment",
+                "synthesis",
+            }.issubset(stages)
+        )
         self.assertEqual(wiki_before, (self.root / "wiki" / "sentinel.md").read_bytes())
 
     def test_manual_synthesis_refreshes_reasoning_after_deep_read_stop(self):
@@ -1308,17 +1345,20 @@ class ReviewLoopTests(unittest.TestCase):
             thread_id="manual-synthesis-thread",
         ).model_copy(update={"stop_after": "deep-read"})
         engine = FakeReviewEngine()
+        progress = RecordingProgress()
         with ReviewController(
             self.settings,
             config=config,
             scope=self.scope,
             semantic_engine=engine,
             providers=self._providers(config),
+            progress=progress,
         ) as controller:
             stopped = controller.start()
             synthesized = controller.synthesize_now()
 
         store = ReviewArtifactStore(self.settings, config)
+        self.assertIn("synthesis", {str(item["stage"]) for item in progress.events})
         self.assertEqual("stop-after-deep-read", stopped["stop_reason"])
         self.assertTrue(synthesized["completed"])
         self.assertEqual(1, len(store.claims()))

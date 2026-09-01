@@ -132,6 +132,7 @@ Key 不得写入 `.env`、Search Run YAML、Wiki、SQLite memory、命令参数�
 | `--stop-after` | A | `synthesis` | 在指定 Review stage 后有界停止 |
 | `--thread` | R | 必填 | SQLite checkpoint 身份 |
 | `--run-id` | R | 自动生成 | artifact 身份；必须为安全 ASCII 文件名 |
+| `HARNESS_PROGRESS` | A | `auto` | Review CLI 进度显示模式：`auto`、`live`、`plain`、`off`；所有模式都持续更新运行目录中的 `state/progress.json` |
 
 V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 CLI 覆盖：
 

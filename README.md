@@ -50,6 +50,12 @@ ResearchGate、Academia.edu 等镜像用于导航，正式证据来自原始论�
 关系候选，只有精确 DOI/arXiv/repository/URL 身份会自动合并。
 使用说明见 `docs/REVIEW_FIRST_HARNESS.md`。
 
+长时间运行的 Review 命令会在 stderr 使用单行心跳显示当前阶段、完成数、当前来源、
+耗时和循环点号。阶段切换时只保留一条完成记录，不会持续追加点号。最终 JSON 仍从
+stdout 输出。相同状态同时写入
+`.harness/review-runs/<run-id>/state/progress.json`，`research review status` 会返回
+该快照。可用 `HARNESS_PROGRESS=auto|live|plain|off` 调整终端显示；状态文件始终更新。
+
 项目现在用 LangGraph 作为编排层。确定性的 Wiki parser、resolver、validator、
 query 与 DeepXiv 脚本仍是普通 Python 能力。系统分为 inner tool loop、Skill
 执行层和 outer research controller 三层。

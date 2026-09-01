@@ -1277,6 +1277,7 @@ def _review_state_payload(
             "next_recommended_pivot": gaps[0].question if gaps else None,
         },
         "run_local_errors": len(store.error_events()),
+        "progress": store.progress(),
         "paths": paths,
         "fast_loop_wiki_written": False,
     }
@@ -1290,6 +1291,7 @@ def _run_review_start(
 ) -> int:
     from .review_control import ReviewController
     from .model_client import ReviewModelBundle
+    from .progress import ConsoleProgress
     from .review_models import ReviewRunConfig
     from .review_semantics import LangChainReviewSemanticEngine
     from .review_storage import ReviewArtifactStore, load_review_scope
@@ -1328,28 +1330,32 @@ def _run_review_start(
         single_model_fallback_used=bundle.single_model_fallback,
     )
     semantic_engine = LangChainReviewSemanticEngine(bundle, settings.skills_root)
-    with ReviewController(
-        settings,
-        config=config,
-        scope=scope,
-        semantic_engine=semantic_engine,
-    ) as controller:
-        state = controller.start()
     store = ReviewArtifactStore(settings, config)
+    with ConsoleProgress(path=store.progress_path) as progress:
+        with ReviewController(
+            settings,
+            config=config,
+            scope=scope,
+            semantic_engine=semantic_engine,
+            progress=progress,
+        ) as controller:
+            state = controller.start()
     _emit_payload(_review_state_payload(state, store), args.format)
     return 0
 
 
 def _run_review_resume(settings: HarnessSettings, args: argparse.Namespace) -> int:
     from .review_control import ReviewController
+    from .progress import ConsoleProgress
 
     _state, config, store = _review_checkpoint_context(
         settings,
         research_id=args.research_id,
         thread_id=args.thread,
     )
-    with ReviewController(settings, config=config) as controller:
-        state = controller.resume(mode=args.mode)
+    with ConsoleProgress(path=store.progress_path) as progress:
+        with ReviewController(settings, config=config, progress=progress) as controller:
+            state = controller.resume(mode=args.mode)
     _emit_payload(_review_state_payload(state, store), args.format)
     return 0
 
@@ -1366,6 +1372,7 @@ def _run_review_status(settings: HarnessSettings, args: argparse.Namespace) -> i
 
 def _run_review_synthesize(settings: HarnessSettings, args: argparse.Namespace) -> int:
     from .review_control import ReviewController
+    from .progress import ConsoleProgress
     from .review_providers import ReviewProviderRegistry
 
     _state, config, store = _review_checkpoint_context(
@@ -1378,12 +1385,14 @@ def _run_review_synthesize(settings: HarnessSettings, args: argparse.Namespace) 
         store.working_root,
         network_concurrency=config.network_concurrency,
     )
-    with ReviewController(
-        settings,
-        config=config,
-        providers=providers,
-    ) as controller:
-        state = controller.synthesize_now()
+    with ConsoleProgress(path=store.progress_path) as progress:
+        with ReviewController(
+            settings,
+            config=config,
+            providers=providers,
+            progress=progress,
+        ) as controller:
+            state = controller.synthesize_now()
     _emit_payload(_review_state_payload(state, store), args.format)
     return 0
 

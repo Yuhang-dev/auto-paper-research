@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 from .config import HarnessSettings
 from .model_client import ReviewModelBundle
 from .persistence import HarnessPersistence
+from .progress import NullProgress, ProgressSink
 from .review_logic import (
     analyze_review_gaps,
     build_review_coverage,
@@ -474,11 +475,14 @@ def build_review_graph(
     semantic_engine: ReviewSemanticEngine,
     providers: ReviewProviderRegistry,
     persistence: HarnessPersistence,
+    progress: Optional[ProgressSink] = None,
 ):
     if persistence.checkpointer is None:
         raise RuntimeError("Harness persistence must be open before compiling the review graph")
+    progress_sink = progress or NullProgress()
 
     def bootstrap(state: ReviewState) -> Dict[str, Any]:
+        progress_sink.update(stage="bootstrap", detail="Initializing run artifacts")
         store.initialize()
         return {
             "research_id": config.research_id,
@@ -494,6 +498,7 @@ def build_review_graph(
         }
 
     def frame(state: ReviewState) -> Dict[str, Any]:
+        progress_sink.update(stage="frame", detail="Framing research questions and facets")
         uncertainties = store.uncertainties()
         if not uncertainties:
             uncertainties = _initial_uncertainties(scope)
@@ -513,6 +518,10 @@ def build_review_graph(
 
     def retrieve(state: ReviewState) -> Dict[str, Any]:
         round_number = int(state.get("round_number") or 0) + 1
+        progress_sink.update(
+            stage="retrieval",
+            detail=f"Planning search round {round_number}",
+        )
         existing_sources = store.sources()
         prior_queries = store.queries()
         plan = semantic_engine.plan_queries(
@@ -548,7 +557,22 @@ def build_review_graph(
         plan = plan.model_copy(update={"queries": queries})
         store.write_query_plan(plan)
         limits = _provider_limits(config, existing_sources, round_number, queries)
+        progress_sink.update(
+            stage="retrieval",
+            detail=(
+                f"Running round {round_number} queries across "
+                f"{', '.join(sorted({item.provider for item in queries}))}"
+            ),
+            completed=0,
+            total=len(queries),
+        )
         batch = _run_async(providers.search(queries, limits=limits))
+        progress_sink.update(
+            stage="retrieval",
+            detail=f"Retrieved {len(batch.sources)} source records",
+            completed=len(queries),
+            total=len(queries),
+        )
         # A query becomes part of durable trajectory only after its provider
         # batch returns. Per-query successful results are cached by the provider
         # registry, so an interrupt retries only unfinished calls.
@@ -623,6 +647,13 @@ def build_review_graph(
         existing = {item.source_id: item for item in store.screenings()}
         pending = [item for item in sources if item.source_id not in existing]
         batches = [pending[index : index + 16] for index in range(0, len(pending), 16)]
+        processed = 0
+        progress_sink.update(
+            stage="screening",
+            detail="Screening source metadata",
+            completed=processed,
+            total=len(pending),
+        )
         if batches:
             with ThreadPoolExecutor(max_workers=config.skim_concurrency) as executor:
                 futures = {
@@ -645,9 +676,16 @@ def build_review_graph(
                             observed=f"{type(exc).__name__}: {exc}",
                             source_id=",".join(item.source_id for item in batch),
                         )
-                        continue
-                    existing.update({item.source_id: item for item in result.screenings})
-                    store.write_screenings(tuple(existing.values()))
+                    else:
+                        existing.update({item.source_id: item for item in result.screenings})
+                        store.write_screenings(tuple(existing.values()))
+                    processed += len(batch)
+                    progress_sink.update(
+                        stage="screening",
+                        detail="Screening source metadata",
+                        completed=processed,
+                        total=len(pending),
+                    )
         selected = select_for_skim(sources, existing, config)
         sequence = _append_trajectory(
             store,
@@ -669,6 +707,13 @@ def build_review_graph(
         existing = {item.source_id: item for item in store.skims()}
         selected = tuple(state.get("selected_skim_ids") or ())
         pending = [sources[item] for item in selected if item in sources and item not in existing]
+        processed = 0
+        progress_sink.update(
+            stage="skim",
+            detail="Reading titles, abstracts, and source summaries",
+            completed=processed,
+            total=len(pending),
+        )
         if pending:
             with ThreadPoolExecutor(max_workers=config.skim_concurrency) as executor:
                 futures = {
@@ -696,9 +741,16 @@ def build_review_graph(
                             observed=f"{type(exc).__name__}: {exc}",
                             source_id=source.source_id,
                         )
-                        continue
-                    existing[result.source_id] = result
-                    store.write_skims(tuple(existing.values()))
+                    else:
+                        existing[result.source_id] = result
+                        store.write_skims(tuple(existing.values()))
+                    processed += 1
+                    progress_sink.update(
+                        stage="skim",
+                        detail=source.title,
+                        completed=processed,
+                        total=len(pending),
+                    )
         sequence = _append_trajectory(
             store,
             state,
@@ -721,6 +773,10 @@ def build_review_graph(
         }
 
     def reason_from_skims(state: ReviewState) -> Dict[str, Any]:
+        progress_sink.update(
+            stage="reasoning",
+            detail="Updating provisional understanding and open questions",
+        )
         selected = set(state.get("selected_skim_ids") or ())
         skims = tuple(item for item in store.skims() if item.source_id in selected)
         claims = store.claims()
@@ -819,8 +875,10 @@ def build_review_graph(
         acquisition_errors = []
         enrichment_errors = []
         tasks = [asyncio.create_task(one(item)) for item in selected_sources]
+        processed = 0
         for task in asyncio.as_completed(tasks):
             source, enriched, material, acquisition_error, enrichment_error = await task
+            processed += 1
             enriched_sources[source.source_id] = enriched
             if enrichment_error is not None:
                 enrichment_errors.append((source, enrichment_error))
@@ -831,6 +889,12 @@ def build_review_graph(
                 # the batch so Ctrl+C only leaves unfinished sources pending.
                 store.write_material(material)
                 materials[source.source_id] = material
+            progress_sink.update(
+                stage="deep-read",
+                detail=f"Acquiring source material: {source.title}",
+                completed=processed,
+                total=len(selected_sources),
+            )
         return materials, enriched_sources, acquisition_errors, enrichment_errors
 
     def deep_read(state: ReviewState) -> Dict[str, Any]:
@@ -843,6 +907,12 @@ def build_review_graph(
         )
         selected = tuple(ranked[:target_total])
         selected_sources = [sources[item] for item in selected if item in sources]
+        progress_sink.update(
+            stage="deep-read",
+            detail="Downloading and extracting selected source material",
+            completed=0,
+            total=len(selected_sources),
+        )
         materials, enriched_sources, acquisition_errors, enrichment_errors = _run_async(
             _acquire_pending_materials(selected_sources)
         )
@@ -889,6 +959,13 @@ def build_review_graph(
             and source_id not in completed
             and store.material(source_id) is not None
         ]
+        extracted = 0
+        progress_sink.update(
+            stage="deep-read",
+            detail="Extracting citation-ready EvidenceCards",
+            completed=extracted,
+            total=len(pending),
+        )
         if pending:
             with ThreadPoolExecutor(max_workers=config.deep_read_concurrency) as executor:
                 futures = {
@@ -918,10 +995,17 @@ def build_review_graph(
                             observed=f"{type(exc).__name__}: {exc}",
                             source_id=source.source_id,
                         )
-                        continue
-                    cards.update({item.card_id: item for item in extraction.cards})
-                    store.write_cards(tuple(cards.values()))
-                    store.mark_deep_read_completed(source.source_id)
+                    else:
+                        cards.update({item.card_id: item for item in extraction.cards})
+                        store.write_cards(tuple(cards.values()))
+                        store.mark_deep_read_completed(source.source_id)
+                    extracted += 1
+                    progress_sink.update(
+                        stage="deep-read",
+                        detail=f"Evidence extraction: {source.title}",
+                        completed=extracted,
+                        total=len(pending),
+                    )
         completed = set(store.deep_read_completed())
         uncertainties = _refresh_review_analysis(
             scope=scope,
@@ -950,6 +1034,10 @@ def build_review_graph(
         }
 
     def assess(state: ReviewState) -> Dict[str, Any]:
+        progress_sink.update(
+            stage="assessment",
+            detail="Evaluating coverage, gaps, and cross-paper evidence",
+        )
         selected = set(state.get("selected_skim_ids") or ())
         skims = tuple(item for item in store.skims() if item.source_id in selected)
         claims = store.claims()
@@ -1087,6 +1175,10 @@ def build_review_graph(
         }
 
     def synthesize(state: ReviewState) -> Dict[str, Any]:
+        progress_sink.update(
+            stage="synthesis",
+            detail="Building the cited review and promotion suggestions",
+        )
         claims = store.claims()
         assessments = store.assessments()
         uncertainties = _refresh_review_analysis(
@@ -1184,6 +1276,10 @@ def build_review_graph(
         }
 
     def stop_early(state: ReviewState) -> Dict[str, Any]:
+        progress_sink.update(
+            stage=config.stop_after,
+            detail=f"Stopping after requested stage {config.stop_after}",
+        )
         sequence = _append_trajectory(
             store,
             state,
@@ -1278,6 +1374,7 @@ class ReviewController:
         scope: Optional[ReviewScope] = None,
         semantic_engine: Optional[ReviewSemanticEngine] = None,
         providers: Optional[ReviewProviderRegistry] = None,
+        progress: Optional[ProgressSink] = None,
     ):
         self.settings = settings
         self.settings.validate()
@@ -1313,6 +1410,7 @@ class ReviewController:
         if providers is None and config.profile == "standard":
             self.providers.require_standard_sources()
         self.persistence = HarnessPersistence(settings)
+        self.progress = progress or NullProgress()
         self.graph = None
 
     def open(self) -> "ReviewController":
@@ -1327,6 +1425,7 @@ class ReviewController:
                 semantic_engine=self.semantic_engine,
                 providers=self.providers,
                 persistence=self.persistence,
+                progress=self.progress,
             )
         except Exception:
             self.close()
@@ -1404,6 +1503,10 @@ class ReviewController:
     def synthesize_now(self) -> Dict[str, Any]:
         if self.graph is None:
             raise RuntimeError("ReviewController is not open")
+        self.progress.update(
+            stage="assessment",
+            detail="Refreshing evidence-based understanding before synthesis",
+        )
         state = self.get_state().values
         if not state:
             raise ValueError("Review synthesis requires an existing checkpoint")
@@ -1458,6 +1561,10 @@ class ReviewController:
             saturated=search_saturated(self.store.round_gains()),
         )
         self.store.write_readiness(readiness)
+        self.progress.update(
+            stage="synthesis",
+            detail="Building the cited review and promotion suggestions",
+        )
         try:
             draft = self.semantic_engine.synthesize(
                 scope=self.scope,
@@ -1515,6 +1622,12 @@ class ReviewController:
                 readiness=readiness,
                 trajectory_path=self.store.relative(self.store.trajectory_path),
             )
+        )
+        self.progress.update(
+            stage="synthesis",
+            detail=f"Rendered report from {len(cards)} EvidenceCards",
+            completed=len(cards),
+            total=len(cards),
         )
         aggregate_review_error_book(
             self.settings,

@@ -35,6 +35,7 @@ from .review_models import (
     TrajectoryEvent,
     UnderstandingClaim,
 )
+from .progress import read_progress
 from .text_normalization import normalize_data, normalize_text
 
 
@@ -283,6 +284,13 @@ class ReviewArtifactStore:
     @property
     def report_path(self) -> Path:
         return self.delivery_root / "review.md"
+
+    @property
+    def progress_path(self) -> Path:
+        return self._internal("progress.json")
+
+    def progress(self) -> Optional[dict[str, Any]]:
+        return read_progress(self.progress_path)
 
     def initialize(self) -> None:
         self.working_root.mkdir(parents=True, exist_ok=True)
