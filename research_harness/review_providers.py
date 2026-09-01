@@ -871,6 +871,11 @@ class ReviewProviderRegistry:
         self.repository_root = repository_root.resolve()
         self.working_root = working_root.resolve()
         self.network_concurrency = network_concurrency
+        self._semantic_scholar_circuit_path = (
+            self.working_root
+            / "provider-results"
+            / "semantic-scholar-rate-limited.json"
+        )
         if providers is None:
             configured: dict[str, RetrievalProvider] = {
                 "github": GitHubProvider(os.getenv("GITHUB_TOKEN", "")),
@@ -993,9 +998,17 @@ class ReviewProviderRegistry:
     async def enrich_source(self, source: SourceRecord) -> SourceRecord:
         """Best-effort caller hook used only after deep-read selection."""
 
-        if self.semantic_scholar is None or source.source_type != "paper":
+        if (
+            self.semantic_scholar is None
+            or source.source_type != "paper"
+            or self._semantic_scholar_circuit_path.is_file()
+        ):
             return source
-        return await self.semantic_scholar.enrich(source)
+        try:
+            return await self.semantic_scholar.enrich(source)
+        except RuntimeError as exc:
+            self._open_semantic_scholar_circuit(exc)
+            raise
 
     async def enrich_sources(
         self,
@@ -1003,9 +1016,30 @@ class ReviewProviderRegistry:
     ) -> dict[str, SourceRecord]:
         """Batch optional metadata enrichment for the selected deep-read cohort."""
 
-        if self.semantic_scholar is None:
+        if (
+            self.semantic_scholar is None
+            or self._semantic_scholar_circuit_path.is_file()
+        ):
             return {item.source_id: item for item in sources}
-        return await self.semantic_scholar.enrich_many(sources)
+        try:
+            return await self.semantic_scholar.enrich_many(sources)
+        except RuntimeError as exc:
+            self._open_semantic_scholar_circuit(exc)
+            raise
+
+    def _open_semantic_scholar_circuit(self, exc: RuntimeError) -> None:
+        if "Semantic Scholar HTTP 429" not in str(exc):
+            return
+        _atomic_json(
+            self._semantic_scholar_circuit_path,
+            {
+                "schema_version": "0.1",
+                "provider": "semantic_scholar",
+                "status": "rate-limited",
+                "opened_at": _utc_now(),
+                "scope": "current-review-run",
+            },
+        )
 
     async def acquire_material(self, source: SourceRecord) -> SourceMaterial:
         acquired_at = _utc_now()

@@ -1091,6 +1091,43 @@ sources:
         self.assertTrue(provider.rate_limit_circuit_open)
         self.assertEqual(source, skipped[source.source_id])
 
+    def test_semantic_scholar_rate_limit_circuit_survives_registry_reopen(self):
+        source = _paper_source(1)
+
+        class RateLimitedSemanticScholar:
+            def __init__(self):
+                self.calls = 0
+
+            async def enrich_many(self, _sources):
+                self.calls += 1
+                raise RuntimeError("Semantic Scholar HTTP 429: Too Many Requests")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first_provider = RateLimitedSemanticScholar()
+            first = ReviewProviderRegistry(
+                root,
+                root / "working",
+                providers={},
+                semantic_scholar=first_provider,
+            )
+            with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                asyncio.run(first.enrich_sources((source,)))
+
+            second_provider = RateLimitedSemanticScholar()
+            reopened = ReviewProviderRegistry(
+                root,
+                root / "working",
+                providers={},
+                semantic_scholar=second_provider,
+            )
+            enriched = asyncio.run(reopened.enrich_sources((source,)))
+
+            self.assertEqual(1, first_provider.calls)
+            self.assertEqual(0, second_provider.calls)
+            self.assertEqual(source, enriched[source.source_id])
+            self.assertTrue(reopened._semantic_scholar_circuit_path.is_file())
+
     def test_semantic_scholar_http_error_retains_safe_service_message(self):
         payload = b'{"message":"Too Many Requests","code":"429"}'
 

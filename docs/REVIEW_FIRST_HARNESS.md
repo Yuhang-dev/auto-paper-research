@@ -154,7 +154,8 @@ python -B -m research_harness doctor
 `SEMANTIC_SCHOLAR_API_KEY`。Key 加载到当前进程，不进入 run config、artifact、
 SQLite 或 Git。Semantic Scholar 请求只发生在 Deep Read 选择之后，一次批量补全
 本轮入选论文的有限元数据；429 时短退避重试一次。仍失败只记录一条可选元数据错误，
-并在当前进程剩余轮次熔断 S2 元数据补全，不会阻断 PDF 获取、证据抽取或整轮调研。
+并在当前 review run 中持久化熔断 S2 元数据补全；恢复同一 run 时直接跳过该可选步骤，
+不会阻断 PDF 获取、证据抽取或整轮调研。
 S2 返回的 citation count 等元数据仅用于
 导航和审计，不能替代带 locator 的 `EvidenceCard`。
 

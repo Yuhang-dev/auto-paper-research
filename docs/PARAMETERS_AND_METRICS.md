@@ -105,7 +105,7 @@ $env:HARNESS_DB_PATH = "C:/wiki-papersearch/.harness/research-harness.sqlite3"
 | `OPENAI_BASE_URL` | A | 无 | 旧 OpenAI SDK-compatible endpoint 变量；与同时存在的 `OPENAI_API_BASE` 不一致时拒绝启动 |
 | `OPENAI_API_KEY` | A | 无 | OpenAI-compatible endpoint 的凭证；本地无鉴权服务也需非空 sentinel |
 | `DEEPXIV_TOKEN` | A | 无 | DeepXiv SDK 凭证；没有时论文发现 provider 不可用 |
-| `SEMANTIC_SCHOLAR_API_KEY` | A | 无 | 可选的 Semantic Scholar 凭证；仅补充入选论文元数据，不参与第一轮批量发现 |
+| `SEMANTIC_SCHOLAR_API_KEY` | A | 无 | 可选的 Semantic Scholar 凭证；仅补充入选论文元数据，不参与第一轮批量发现；重复 429 会在当前 review run 持久化熔断 |
 | `S2_API_KEY` | F | 无 | `SEMANTIC_SCHOLAR_API_KEY` 的兼容别名；规范变量优先 |
 | `TAVILY_API_KEY` | A | 无 | Review Fast Loop 的 Web/官方项目页检索凭证；standard profile 必需 |
 | `GITHUB_TOKEN` | A | 无 | GitHub REST 凭证；可选，但 standard 正式运行建议配置以避免匿名限流 |
