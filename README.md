@@ -107,6 +107,11 @@ GITHUB_TOKEN=<optional-token>
 
 模型服务采用 OpenAI-compatible 协议，`openai:<served-model-id>` 中的 ID 必须与服务端实际接受的模型名一致。`.env.local` 已被 Git 忽略；环境变量会覆盖文件中的同名配置。
 
+长时联网调研默认对模型、检索、网页和 arXiv PDF 使用有限重试。Semantic Scholar
+按同一 key 至少间隔 1.1 秒请求；429 会优先采用服务端 `Retry-After`，否则从 30 秒
+开始退避。所有等待和尝试次数都可在 `.env.local` 中通过
+`HARNESS_*_TIMEOUT_SECONDS`、`HARNESS_NETWORK_*` 和 `HARNESS_S2_*` 调整。
+
 检查环境：
 
 ```powershell
@@ -252,7 +257,7 @@ python -B -m research_harness research review synthesize `
 .harness/review-runs/<run-id>/state/progress.json
 ```
 
-`Ctrl+C` 会保留 checkpoint。再次使用同一个 `--thread` 执行 `resume`，已完成的来源、Skim、材料和 EvidenceCard 会被复用。
+`Ctrl+C` 会保留 checkpoint。再次使用同一个 `--thread` 执行 `resume`，已完成的来源、Skim、材料和 EvidenceCard 会被复用。已经生成报告但仍有入选论文深读失败时，`resume --mode replan` 只补这些论文，再更新 assessment 和报告。
 
 ## 证据与非共识规则
 

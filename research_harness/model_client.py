@@ -14,6 +14,63 @@ from langchain_openai import ChatOpenAI
 from .config import HarnessSettings
 
 
+def _runtime_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _model_runtime(role: Optional[str] = None) -> tuple[int, int]:
+    role_name = str(role or "").strip().upper()
+    default_timeout = 180 if role_name == "FAST" else 300
+    timeout_name = (
+        f"HARNESS_{role_name}_MODEL_TIMEOUT_SECONDS"
+        if role_name
+        else "HARNESS_MODEL_TIMEOUT_SECONDS"
+    )
+    retries_name = (
+        f"HARNESS_{role_name}_MODEL_MAX_RETRIES"
+        if role_name
+        else "HARNESS_MODEL_MAX_RETRIES"
+    )
+    timeout_seconds = _runtime_int(
+        timeout_name,
+        _runtime_int(
+            "HARNESS_MODEL_TIMEOUT_SECONDS",
+            default_timeout,
+            minimum=30,
+            maximum=1800,
+        ),
+        minimum=30,
+        maximum=1800,
+    )
+    max_retries = _runtime_int(
+        retries_name,
+        _runtime_int(
+            "HARNESS_MODEL_MAX_RETRIES",
+            2,
+            minimum=0,
+            maximum=6,
+        ),
+        minimum=0,
+        maximum=6,
+    )
+    return timeout_seconds, max_retries
+
+
 @dataclass(frozen=True)
 class ModelProfile:
     """One OpenAI-compatible endpoint without serializing its credential."""
@@ -133,23 +190,27 @@ def create_chat_model(settings: HarnessSettings) -> BaseChatModel:
         raise ValueError(
             "OPENAI_API_KEY is required by the OpenAI-compatible model client"
         )
+    timeout_seconds, max_retries = _model_runtime()
     return ChatOpenAI(
         model=model_name,
         base_url=settings.model_base_url,
         api_key=api_key,
+        max_retries=max_retries,
+        timeout=timeout_seconds,
     )
 
 
 def create_profile_chat_model(profile: ModelProfile) -> BaseChatModel:
     """Create a deterministic client for one review task profile."""
 
+    timeout_seconds, max_retries = _model_runtime(profile.role)
     return ChatOpenAI(
         model=profile.served_model_name,
         base_url=profile.base_url,
         api_key=profile.api_key,
         temperature=0,
-        max_retries=1,
-        timeout=120,
+        max_retries=max_retries,
+        timeout=timeout_seconds,
     )
 
 

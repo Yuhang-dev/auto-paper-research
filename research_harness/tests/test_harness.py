@@ -21,7 +21,11 @@ from research_harness.cli import main as cli_main, parse_args
 from research_harness.env_file import load_local_env
 from research_harness.graph import ResearchHarness
 from research_harness.memory import list_notes, recall_notes, remember_note
-from research_harness.model_client import create_chat_model
+from research_harness.model_client import (
+    ModelProfile,
+    create_chat_model,
+    create_profile_chat_model,
+)
 from research_harness.persistence import HarnessPersistence
 from research_harness.research_control import (
     AutonomousResearchController,
@@ -152,6 +156,26 @@ class ConfigurationAndPersistenceTests(HarnessTestCase):
             "http://127.0.0.1:8000/v1",
             str(model.openai_api_base).rstrip("/"),
         )
+
+    def test_review_model_timeout_and_retries_are_configurable(self) -> None:
+        profile = ModelProfile(
+            role="reasoning",
+            model="openai:fixture-reasoning",
+            base_url="http://127.0.0.1:8000/v1",
+            api_key="fixture-key",
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "HARNESS_REASONING_MODEL_TIMEOUT_SECONDS": "777",
+                "HARNESS_REASONING_MODEL_MAX_RETRIES": "4",
+            },
+            clear=False,
+        ):
+            model = create_profile_chat_model(profile)
+
+        self.assertEqual(777.0, model.request_timeout)
+        self.assertEqual(4, model.max_retries)
 
     def test_model_configuration_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "openai:<served-model-name>"):

@@ -1779,7 +1779,87 @@ class ReviewController:
         if bool(current.values.get("allow_network")) != self.config.allow_network:
             raise ValueError("Review checkpoint resume must preserve network authority")
         if bool(current.values.get("completed")) and not current.next:
-            return dict(current.values)
+            if mode == "checkpoint":
+                return dict(current.values)
+            completed_ids = set(self.store.deep_read_completed())
+            selected_ids = tuple(
+                current.values.get("selected_deep_read_ids")
+                or select_for_deep_read(
+                    self.store.sources(),
+                    {item.source_id: item for item in self.store.skims()},
+                    self.config,
+                )
+            )
+            missing_ids = tuple(
+                source_id
+                for source_id in selected_ids
+                if source_id not in completed_ids
+            )
+            if not missing_ids:
+                return dict(current.values)
+            self.progress.update(
+                stage="deep-read",
+                detail=(
+                    "Retrying incomplete deep-read sources: "
+                    + ", ".join(missing_ids)
+                ),
+                completed=0,
+                total=len(missing_ids),
+            )
+            coverage = self.store.coverage()
+            technology_map = self.store.technology_map()
+            self.graph.update_state(
+                _checkpoint_config(self.config.research_id, selected),
+                {
+                    "phase": "deep-read",
+                    "completed": False,
+                    "stop_reason": "",
+                    "round_start": {
+                        "cards": len(self.store.cards()),
+                        "method_families": sorted(
+                            {
+                                family
+                                for skim in self.store.skims()
+                                for family in skim.method_families
+                            }
+                        ),
+                        "blocking_open": sorted(
+                            item.uncertainty_id
+                            for item in self.store.uncertainties()
+                            if item.blocking and item.status == "open"
+                        ),
+                        "evidence_sources": sorted(
+                            {item.source_id for item in self.store.cards()}
+                        ),
+                        "covered_facets": sorted(
+                            {
+                                item.facet
+                                for item in coverage.facets
+                                if item.status == "covered"
+                            }
+                            if coverage
+                            else set()
+                        ),
+                        "confirmed_relations": sorted(
+                            str(item.get("relation_id"))
+                            for item in technology_map.get(
+                                "relation_candidates", []
+                            )
+                            if isinstance(item, Mapping)
+                            and item.get("status") == "confirmed"
+                        ),
+                    },
+                },
+                as_node="reason",
+            )
+            return self.graph.invoke(
+                None,
+                _checkpoint_config(
+                    self.config.research_id,
+                    selected,
+                    recursion_limit=96,
+                ),
+            )
         if mode == "checkpoint":
             if not current.next:
                 return dict(current.values)

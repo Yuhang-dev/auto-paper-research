@@ -19,6 +19,7 @@ from research_harness.evidence_verification import (
     PaperVerificationDraft,
 )
 from research_harness.model_client import ReviewModelBundle
+from research_harness.network_retry import NetworkRetryPolicy
 from research_harness.review_control import (
     ReviewController,
     _complete_missing_nonconsensus_assessments,
@@ -74,6 +75,7 @@ from research_harness.review_models import (
 from research_harness.review_promotion import ReviewPromoter
 from research_harness.review_providers import (
     ReviewProviderRegistry,
+    SemanticScholarHTTPError,
     SemanticScholarProvider,
     _semantic_scholar_paper_batch,
     _semantic_scholar_paper_details,
@@ -643,6 +645,75 @@ sources:
         self.assertEqual(5, len(store.cards()))
         self.assertEqual(5, len(store.load_promotion_manifest().items))
 
+    def test_completed_seed5_replan_retries_only_missing_deep_read(self):
+        sources = tuple(
+            _paper_source(index).model_copy(
+                update={
+                    "metadata": {
+                        "review_seed": True,
+                        "source_role": "primary-study",
+                        "selection_rationale": "Curated cold-start paper.",
+                    }
+                }
+            )
+            for index in range(1, 6)
+        )
+        missing_id = sources[-1].source_id
+        config = self._seed5_config(
+            sources,
+            run_id="seed5-repair-run",
+            thread_id="seed5-repair-thread",
+        )
+        store = ReviewArtifactStore(self.settings, config)
+        store.initialize()
+        store.write_sources(sources)
+
+        class FlakySeedProviders:
+            names = ()
+
+            def __init__(self):
+                self.failed_once = False
+                self.calls = []
+
+            async def enrich_sources(self, selected):
+                return {item.source_id: item for item in selected}
+
+            async def acquire_material(self, source):
+                self.calls.append(source.source_id)
+                if source.source_id == missing_id and not self.failed_once:
+                    self.failed_once = True
+                    raise TimeoutError("fixture PDF timeout")
+                return SourceMaterial(
+                    source_id=source.source_id,
+                    media_type="pdf-text",
+                    sha256=hashlib.sha256(source.source_id.encode()).hexdigest(),
+                    text="Located seed evidence on page one.",
+                    local_path=f"sources/{source.arxiv_id}.pdf",
+                    page_count=1,
+                    selected_pages=(1,),
+                    acquired_at=NOW,
+                )
+
+        providers = FlakySeedProviders()
+        with ReviewController(
+            self.settings,
+            config=config,
+            scope=self.scope,
+            semantic_engine=FakeReviewEngine(),
+            providers=providers,
+        ) as controller:
+            first = controller.start()
+            self.assertTrue(first["completed"])
+            self.assertEqual(4, len(store.deep_read_completed()))
+            repaired = controller.resume(mode="replan")
+
+        self.assertTrue(repaired["completed"])
+        self.assertEqual(5, len(store.deep_read_completed()))
+        self.assertEqual(5, len(store.cards()))
+        self.assertEqual(2, providers.calls.count(missing_id))
+        self.assertEqual(1, providers.calls.count(sources[0].source_id))
+        self.assertEqual(5, len(store.load_promotion_manifest().items))
+
     def test_evidence_extraction_repairs_invalid_structured_output_once(self):
         valid = EvidenceExtraction(
             source_id="paper:arxiv:2504.17768",
@@ -962,6 +1033,7 @@ sources:
         request.assert_called_once_with(
             "ARXIV:2401.00001",
             "fixture-s2-key",
+            timeout=(20, 90),
         )
         self.assertEqual(source.source_id, enriched.source_id)
         self.assertEqual("deepxiv", enriched.provider)
@@ -1069,8 +1141,76 @@ sources:
             enriched = asyncio.run(provider.enrich_many((source,)))
 
         self.assertEqual(2, requested.call_count)
-        slept.assert_called_once_with(2.0)
+        slept.assert_any_call(30)
         self.assertEqual("s2-one", enriched[source.source_id].metadata["semantic_scholar_paper_id"])
+
+    def test_semantic_scholar_honors_retry_after_header(self):
+        source = _paper_source(1)
+        payload = {
+            "paperId": "s2-retry-after",
+            "title": source.title,
+            "externalIds": {"ArXiv": source.arxiv_id},
+        }
+        provider = SemanticScholarProvider(
+            "fixture-s2-key",
+            retry_policy=NetworkRetryPolicy(
+                max_attempts=2,
+                connect_timeout_seconds=1,
+                read_timeout_seconds=5,
+                backoff_seconds=0,
+            ),
+        )
+        with mock.patch(
+            "research_harness.review_providers._semantic_scholar_paper_batch",
+            side_effect=[
+                SemanticScholarHTTPError(
+                    429,
+                    "Too Many Requests",
+                    retry_after_seconds=47,
+                ),
+                (payload,),
+            ],
+        ), mock.patch(
+            "research_harness.review_providers.time.sleep"
+        ) as slept:
+            enriched = asyncio.run(provider.enrich_many((source,)))
+
+        slept.assert_any_call(47)
+        self.assertEqual(
+            "s2-retry-after",
+            enriched[source.source_id].metadata["semantic_scholar_paper_id"],
+        )
+
+    def test_semantic_scholar_batch_retries_transient_timeout(self):
+        source = _paper_source(1)
+        payload = {
+            "paperId": "s2-timeout-recovered",
+            "title": source.title,
+            "externalIds": {"ArXiv": source.arxiv_id},
+        }
+        provider = SemanticScholarProvider(
+            "fixture-s2-key",
+            retry_policy=NetworkRetryPolicy(
+                max_attempts=3,
+                connect_timeout_seconds=1,
+                read_timeout_seconds=5,
+                backoff_seconds=0,
+            ),
+        )
+        with mock.patch(
+            "research_harness.review_providers._semantic_scholar_paper_batch",
+            side_effect=[TimeoutError("read timed out"), TimeoutError("read timed out"), (payload,)],
+        ) as requested, mock.patch(
+            "research_harness.review_providers.time.sleep"
+        ):
+            enriched = asyncio.run(provider.enrich_many((source,)))
+
+        self.assertEqual(3, requested.call_count)
+        self.assertFalse(provider.rate_limit_circuit_open)
+        self.assertEqual(
+            "s2-timeout-recovered",
+            enriched[source.source_id].metadata["semantic_scholar_paper_id"],
+        )
 
     def test_semantic_scholar_opens_run_circuit_after_repeated_rate_limit(self):
         source = _paper_source(1)
@@ -1087,7 +1227,7 @@ sources:
                 asyncio.run(provider.enrich_many((source,)))
             skipped = asyncio.run(provider.enrich_many((source,)))
 
-        self.assertEqual(2, requested.call_count)
+        self.assertEqual(6, requested.call_count)
         self.assertTrue(provider.rate_limit_circuit_open)
         self.assertEqual(source, skipped[source.source_id])
 
@@ -1127,6 +1267,35 @@ sources:
             self.assertEqual(0, second_provider.calls)
             self.assertEqual(source, enriched[source.source_id])
             self.assertTrue(reopened._semantic_scholar_circuit_path.is_file())
+
+    def test_semantic_scholar_rate_limit_circuit_resets_after_cooldown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            provider = SemanticScholarProvider("fixture-s2-key")
+            provider._rate_limit_circuit_open = True
+            registry = ReviewProviderRegistry(
+                root,
+                root / "working",
+                providers={},
+                semantic_scholar=provider,
+            )
+            registry._semantic_scholar_circuit_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            registry._semantic_scholar_circuit_path.write_text(
+                json.dumps(
+                    {
+                        "opened_at": "2000-01-01T00:00:00Z",
+                        "status": "rate-limited",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(registry._semantic_scholar_circuit_is_open())
+            self.assertFalse(provider.rate_limit_circuit_open)
+            self.assertFalse(registry._semantic_scholar_circuit_path.exists())
 
     def test_semantic_scholar_http_error_retains_safe_service_message(self):
         payload = b'{"message":"Too Many Requests","code":"429"}'

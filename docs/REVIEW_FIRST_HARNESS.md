@@ -153,9 +153,10 @@ python -B -m research_harness doctor
 `S2_API_KEY` 也可作为兼容别名，但项目文档统一使用
 `SEMANTIC_SCHOLAR_API_KEY`。Key 加载到当前进程，不进入 run config、artifact、
 SQLite 或 Git。Semantic Scholar 请求只发生在 Deep Read 选择之后，一次批量补全
-本轮入选论文的有限元数据；429 时短退避重试一次。仍失败只记录一条可选元数据错误，
-并在当前 review run 中持久化熔断 S2 元数据补全；恢复同一 run 时直接跳过该可选步骤，
-不会阻断 PDF 获取、证据抽取或整轮调研。
+本轮入选论文的有限元数据。同一 key 的请求默认至少间隔 1.1 秒；429 优先遵循
+`Retry-After`，否则至少等待 30 秒，默认最多尝试 6 次。尝试耗尽后进入 300 秒冷却，
+冷却结束或稍后恢复同一 run 时重新探测。S2 元数据补全失败会被记录，同时 PDF 获取、
+证据抽取和整轮调研继续运行。
 S2 返回的 citation count 等元数据仅用于
 导航和审计，不能替代带 locator 的 `EvidenceCard`。
 
@@ -167,6 +168,32 @@ OPENAI_API_KEY` 可作为 Fast 配置。标准运行缺少 Reasoning 配置会�
 
 `run-config.yaml` 只记录两级模型 ID、base URL、是否实际发生单模型退化和非秘密
 fingerprint；API key 从不进入 config、artifact 或 SQLite checkpoint。
+
+超时和退避参数集中放在 `.env.local`：
+
+```dotenv
+HARNESS_FAST_MODEL_TIMEOUT_SECONDS=180
+HARNESS_FAST_MODEL_MAX_RETRIES=2
+HARNESS_REASONING_MODEL_TIMEOUT_SECONDS=300
+HARNESS_REASONING_MODEL_MAX_RETRIES=2
+
+HARNESS_NETWORK_MAX_ATTEMPTS=3
+HARNESS_NETWORK_CONNECT_TIMEOUT_SECONDS=20
+HARNESS_NETWORK_READ_TIMEOUT_SECONDS=180
+HARNESS_NETWORK_BACKOFF_SECONDS=2
+HARNESS_NETWORK_MAX_BACKOFF_SECONDS=30
+
+HARNESS_S2_MAX_ATTEMPTS=6
+HARNESS_S2_CONNECT_TIMEOUT_SECONDS=20
+HARNESS_S2_READ_TIMEOUT_SECONDS=90
+HARNESS_S2_REQUEST_INTERVAL_SECONDS=1.1
+HARNESS_S2_RATE_LIMIT_BACKOFF_SECONDS=30
+HARNESS_S2_COOLDOWN_SECONDS=300
+```
+
+`HARNESS_NETWORK_*` 同时用于 provider 查询、静态网页、GitHub 元数据和 arXiv PDF；
+PDF 下载会在 `arxiv.org` 与 `export.arxiv.org` 的批准地址之间重试。模型调用使用独立
+预算，避免把慢推理和网络下载混为同一种 timeout。
 
 ## 6. 证据和非共识语义
 

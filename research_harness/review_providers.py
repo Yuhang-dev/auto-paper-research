@@ -18,12 +18,20 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Mapping, Optional, Protocol, Sequence
 
 import requests
 
+from .network_retry import (
+    NetworkRetryPolicy,
+    TRANSIENT_HTTP_STATUS,
+    is_transient_network_error,
+    retry_async,
+    retry_sync,
+)
 from .paper_ingest import extract_pdf_document, select_paper_excerpt
 from .paper_sources import ArxivPaperSourceAcquirer
 from .review_logic import (
@@ -50,6 +58,43 @@ ALLOWED_WEB_CONTENT = (
     "application/xml",
     "application/xhtml+xml",
 )
+
+
+class SemanticScholarHTTPError(RuntimeError):
+    """Bounded S2 failure carrying the status needed by retry policy."""
+
+    def __init__(
+        self,
+        status_code: int,
+        detail: str,
+        *,
+        retry_after_seconds: Optional[float] = None,
+    ):
+        super().__init__(f"Semantic Scholar HTTP {status_code}: {detail}")
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Parse Retry-After seconds or an HTTP date into a bounded delay."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return min(max(float(raw), 0.0), 3600.0)
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(raw)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return min(
+            max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0),
+            3600.0,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -250,6 +295,8 @@ def _semantic_scholar_identifier(source: SourceRecord) -> Optional[str]:
 def _semantic_scholar_paper_details(
     identifier: str,
     api_key: str,
+    *,
+    timeout: tuple[int, int] = (20, 90),
 ) -> Mapping[str, Any]:
     """Fetch one bounded paper-detail record after funnel selection."""
 
@@ -274,7 +321,7 @@ def _semantic_scholar_paper_details(
         url,
         params={"fields": fields},
         headers=headers,
-        timeout=45,
+        timeout=timeout,
         stream=True,
     ) as response:
         data = bytearray()
@@ -286,8 +333,12 @@ def _semantic_scholar_paper_details(
                 )
         if response.status_code >= 400:
             detail = bytes(data).decode("utf-8", errors="replace")[:800]
-            raise RuntimeError(
-                f"Semantic Scholar HTTP {response.status_code}: {detail}"
+            raise SemanticScholarHTTPError(
+                response.status_code,
+                detail,
+                retry_after_seconds=_parse_retry_after(
+                    getattr(response, "headers", {}).get("Retry-After")
+                ),
             )
     payload = json.loads(bytes(data).decode("utf-8", errors="replace"))
     if not isinstance(payload, Mapping):
@@ -298,6 +349,8 @@ def _semantic_scholar_paper_details(
 def _semantic_scholar_paper_batch(
     identifiers: Sequence[str],
     api_key: str,
+    *,
+    timeout: tuple[int, int] = (20, 90),
 ) -> tuple[Optional[Mapping[str, Any]], ...]:
     """Fetch bounded paper metadata for a selected deep-read batch."""
 
@@ -317,7 +370,7 @@ def _semantic_scholar_paper_batch(
         params={"fields": fields},
         headers=headers,
         json={"ids": list(identifiers)},
-        timeout=45,
+        timeout=timeout,
         stream=True,
     ) as response:
         data = bytearray()
@@ -329,8 +382,12 @@ def _semantic_scholar_paper_batch(
                 )
         if response.status_code >= 400:
             detail = bytes(data).decode("utf-8", errors="replace")[:800]
-            raise RuntimeError(
-                f"Semantic Scholar HTTP {response.status_code}: {detail}"
+            raise SemanticScholarHTTPError(
+                response.status_code,
+                detail,
+                retry_after_seconds=_parse_retry_after(
+                    getattr(response, "headers", {}).get("Retry-After")
+                ),
             )
     payload = json.loads(bytes(data).decode("utf-8", errors="replace"))
     if not isinstance(payload, list) or len(payload) != len(identifiers):
@@ -343,32 +400,102 @@ class SemanticScholarProvider:
 
     name = "semantic_scholar"
 
-    def __init__(self, api_key: str):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        retry_policy: Optional[NetworkRetryPolicy] = None,
+    ):
         if not api_key.strip():
             raise ValueError("SEMANTIC_SCHOLAR_API_KEY is required")
         self.api_key = api_key.strip()
         self._request_lock = threading.Lock()
         self._last_request_started = 0.0
         self._rate_limit_circuit_open = False
+        self.request_interval_seconds = float(
+            os.getenv("HARNESS_S2_REQUEST_INTERVAL_SECONDS", "1.1")
+        )
+        if not 0 <= self.request_interval_seconds <= 60:
+            raise ValueError(
+                "HARNESS_S2_REQUEST_INTERVAL_SECONDS must be between 0 and 60"
+            )
+        self.rate_limit_backoff_seconds = float(
+            os.getenv("HARNESS_S2_RATE_LIMIT_BACKOFF_SECONDS", "30")
+        )
+        if not 1 <= self.rate_limit_backoff_seconds <= 600:
+            raise ValueError(
+                "HARNESS_S2_RATE_LIMIT_BACKOFF_SECONDS must be between 1 and 600"
+            )
+        self.retry_policy = retry_policy or NetworkRetryPolicy.from_env(
+            "HARNESS_S2",
+            max_attempts=6,
+            connect_timeout_seconds=20,
+            read_timeout_seconds=90,
+            backoff_seconds=5,
+            max_backoff_seconds=60,
+        )
 
     @property
     def rate_limit_circuit_open(self) -> bool:
         return self._rate_limit_circuit_open
 
+    def reset_rate_limit_circuit(self) -> None:
+        """Allow the provider to probe S2 again after the persisted cooldown."""
+
+        self._rate_limit_circuit_open = False
+
+    @staticmethod
+    def _retryable(exc: BaseException) -> bool:
+        if is_transient_network_error(exc):
+            return True
+        if isinstance(exc, SemanticScholarHTTPError):
+            return exc.status_code in TRANSIENT_HTTP_STATUS
+        match = re.search(r"Semantic Scholar HTTP (\d{3})", str(exc))
+        return bool(match and int(match.group(1)) in TRANSIENT_HTTP_STATUS)
+
+    def _retry_delay(self, exc: BaseException, _next_attempt: int) -> Optional[float]:
+        if isinstance(exc, SemanticScholarHTTPError) and exc.status_code == 429:
+            return max(
+                self.rate_limit_backoff_seconds,
+                exc.retry_after_seconds or 0.0,
+            )
+        if "Semantic Scholar HTTP 429" in str(exc):
+            return self.rate_limit_backoff_seconds
+        return None
+
+    def _wait_for_request_slot(self) -> None:
+        wait_seconds = self.request_interval_seconds - (
+            time.monotonic() - self._last_request_started
+        )
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        self._last_request_started = time.monotonic()
+
     def _request(self, identifier: str) -> Mapping[str, Any]:
         with self._request_lock:
             if self._rate_limit_circuit_open:
                 return {}
-            wait_seconds = 1.0 - (time.monotonic() - self._last_request_started)
-            if wait_seconds > 0:
-                time.sleep(wait_seconds)
-            self._last_request_started = time.monotonic()
-            try:
+
+            def request_once(_attempt: int) -> Mapping[str, Any]:
+                self._wait_for_request_slot()
                 return _semantic_scholar_paper_details(
                     identifier,
                     self.api_key,
+                    timeout=(
+                        self.retry_policy.connect_timeout_seconds,
+                        self.retry_policy.read_timeout_seconds,
+                    ),
                 )
-            except RuntimeError as exc:
+
+            try:
+                return retry_sync(
+                    request_once,
+                    policy=self.retry_policy,
+                    should_retry=self._retryable,
+                    sleeper=time.sleep,
+                    retry_delay=self._retry_delay,
+                )
+            except Exception as exc:
                 if "Semantic Scholar HTTP 429" in str(exc):
                     self._rate_limit_circuit_open = True
                 raise
@@ -380,24 +507,30 @@ class SemanticScholarProvider:
         with self._request_lock:
             if self._rate_limit_circuit_open:
                 return tuple(None for _ in identifiers)
-            wait_seconds = 1.0 - (time.monotonic() - self._last_request_started)
-            if wait_seconds > 0:
-                time.sleep(wait_seconds)
-            for attempt in range(2):
-                self._last_request_started = time.monotonic()
-                try:
-                    return _semantic_scholar_paper_batch(
-                        identifiers,
-                        self.api_key,
-                    )
-                except RuntimeError as exc:
-                    rate_limited = "Semantic Scholar HTTP 429" in str(exc)
-                    if not rate_limited or attempt == 1:
-                        if rate_limited:
-                            self._rate_limit_circuit_open = True
-                        raise
-                    time.sleep(2.0)
-            raise RuntimeError("Semantic Scholar batch retry exhausted")
+
+            def request_once(_attempt: int):
+                self._wait_for_request_slot()
+                return _semantic_scholar_paper_batch(
+                    identifiers,
+                    self.api_key,
+                    timeout=(
+                        self.retry_policy.connect_timeout_seconds,
+                        self.retry_policy.read_timeout_seconds,
+                    ),
+                )
+
+            try:
+                return retry_sync(
+                    request_once,
+                    policy=self.retry_policy,
+                    should_retry=self._retryable,
+                    sleeper=time.sleep,
+                    retry_delay=self._retry_delay,
+                )
+            except Exception as exc:
+                if "Semantic Scholar HTTP 429" in str(exc):
+                    self._rate_limit_circuit_open = True
+                raise
 
     def _apply_payload(
         self,
@@ -871,6 +1004,14 @@ class ReviewProviderRegistry:
         self.repository_root = repository_root.resolve()
         self.working_root = working_root.resolve()
         self.network_concurrency = network_concurrency
+        self.network_policy = NetworkRetryPolicy.from_env()
+        self.semantic_scholar_cooldown_seconds = int(
+            os.getenv("HARNESS_S2_COOLDOWN_SECONDS", "300")
+        )
+        if not 1 <= self.semantic_scholar_cooldown_seconds <= 86_400:
+            raise ValueError(
+                "HARNESS_S2_COOLDOWN_SECONDS must be between 1 and 86400"
+            )
         self._semantic_scholar_circuit_path = (
             self.working_root
             / "provider-results"
@@ -977,7 +1118,10 @@ class ReviewProviderRegistry:
                 return (), None
             try:
                 async with semaphore:
-                    sources = await provider.search(query, limit=limit)
+                    sources = await retry_async(
+                        lambda _attempt: provider.search(query, limit=limit),
+                        policy=self.network_policy,
+                    )
                 self._cache_query(query, sources)
                 return sources, None
             except Exception as exc:
@@ -1001,7 +1145,7 @@ class ReviewProviderRegistry:
         if (
             self.semantic_scholar is None
             or source.source_type != "paper"
-            or self._semantic_scholar_circuit_path.is_file()
+            or self._semantic_scholar_circuit_is_open()
         ):
             return source
         try:
@@ -1018,7 +1162,7 @@ class ReviewProviderRegistry:
 
         if (
             self.semantic_scholar is None
-            or self._semantic_scholar_circuit_path.is_file()
+            or self._semantic_scholar_circuit_is_open()
         ):
             return {item.source_id: item for item in sources}
         try:
@@ -1038,8 +1182,29 @@ class ReviewProviderRegistry:
                 "status": "rate-limited",
                 "opened_at": _utc_now(),
                 "scope": "current-review-run",
+                "cooldown_seconds": self.semantic_scholar_cooldown_seconds,
             },
         )
+
+    def _semantic_scholar_circuit_is_open(self) -> bool:
+        path = self._semantic_scholar_circuit_path
+        if not path.is_file():
+            return False
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            opened_at = datetime.fromisoformat(
+                str(payload["opened_at"]).replace("Z", "+00:00")
+            )
+            elapsed = (datetime.now(timezone.utc) - opened_at).total_seconds()
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            elapsed = self.semantic_scholar_cooldown_seconds
+        if elapsed < self.semantic_scholar_cooldown_seconds:
+            return True
+        path.unlink(missing_ok=True)
+        reset = getattr(self.semantic_scholar, "reset_rate_limit_circuit", None)
+        if callable(reset):
+            reset()
+        return False
 
     async def acquire_material(self, source: SourceRecord) -> SourceMaterial:
         acquired_at = _utc_now()
@@ -1049,6 +1214,9 @@ class ReviewProviderRegistry:
             acquirer = ArxivPaperSourceAcquirer(
                 self.repository_root,
                 destination_root=self.working_root / "sources" / "papers",
+                timeout_seconds=self.network_policy.read_timeout_seconds,
+                max_attempts=self.network_policy.max_attempts,
+                backoff_seconds=self.network_policy.backoff_seconds,
             )
             acquired = await asyncio.to_thread(
                 acquirer.acquire,
@@ -1082,12 +1250,18 @@ class ReviewProviderRegistry:
             provider = self.providers.get("github")
             if not isinstance(provider, GitHubProvider) and not hasattr(provider, "readme"):
                 raise ValueError("GitHub README provider is unavailable")
-            readme_task = provider.readme(source.repository)  # type: ignore[attr-defined]
+            readme_task = retry_async(
+                lambda _attempt: provider.readme(source.repository),  # type: ignore[attr-defined]
+                policy=self.network_policy,
+            )
             audit_method = getattr(provider, "audit", None)
             if callable(audit_method):
                 readme, audit = await asyncio.gather(
                     readme_task,
-                    audit_method(source.repository),
+                    retry_async(
+                        lambda _attempt: audit_method(source.repository),
+                        policy=self.network_policy,
+                    ),
                 )
             else:
                 readme = await readme_task
@@ -1112,9 +1286,14 @@ class ReviewProviderRegistry:
                 text=text[:80_000],
                 acquired_at=acquired_at,
             )
-        text = normalize_text(source.content_preview or await asyncio.to_thread(
-            _fetch_static_web, source.canonical_url
-        ))
+        text = normalize_text(
+            source.content_preview
+            or await asyncio.to_thread(
+                retry_sync,
+                lambda _attempt: _fetch_static_web(source.canonical_url),
+                policy=self.network_policy,
+            )
+        )
         if not text.strip():
             raise ValueError("web source returned no readable content")
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()

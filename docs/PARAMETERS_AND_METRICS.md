@@ -105,7 +105,7 @@ $env:HARNESS_DB_PATH = "C:/wiki-papersearch/.harness/research-harness.sqlite3"
 | `OPENAI_BASE_URL` | A | 无 | 旧 OpenAI SDK-compatible endpoint 变量；与同时存在的 `OPENAI_API_BASE` 不一致时拒绝启动 |
 | `OPENAI_API_KEY` | A | 无 | OpenAI-compatible endpoint 的凭证；本地无鉴权服务也需非空 sentinel |
 | `DEEPXIV_TOKEN` | A | 无 | DeepXiv SDK 凭证；没有时论文发现 provider 不可用 |
-| `SEMANTIC_SCHOLAR_API_KEY` | A | 无 | 可选的 Semantic Scholar 凭证；仅补充入选论文元数据，不参与第一轮批量发现；重复 429 会在当前 review run 持久化熔断 |
+| `SEMANTIC_SCHOLAR_API_KEY` | A | 无 | 可选的 Semantic Scholar 凭证；仅补充入选论文元数据，不参与第一轮批量发现；429 会限速退避，耗尽后进入有期限冷却 |
 | `S2_API_KEY` | F | 无 | `SEMANTIC_SCHOLAR_API_KEY` 的兼容别名；规范变量优先 |
 | `TAVILY_API_KEY` | A | 无 | Review Fast Loop 的 Web/官方项目页检索凭证；standard profile 必需 |
 | `GITHUB_TOKEN` | A | 无 | GitHub REST 凭证；可选，但 standard 正式运行建议配置以避免匿名限流 |
@@ -127,6 +127,25 @@ Key 不得写入 `.env`、Search Run YAML、Wiki、SQLite memory、命令参数�
 | `HARNESS_REASONING_MODEL` | A | 无 | Deep Read、EvidenceCard、reasoning、synthesis 模型 |
 | `HARNESS_REASONING_MODEL_BASE_URL` | A | 无 | Reasoning endpoint |
 | `HARNESS_REASONING_API_KEY` | A | 无 | Reasoning endpoint 凭证 |
+| `HARNESS_MODEL_TIMEOUT_SECONDS` | A | `300` | 旧 Durable Loop 单次模型请求 timeout，合法 `30..1800` 秒 |
+| `HARNESS_MODEL_MAX_RETRIES` | A | `2` | 通用模型重试次数，合法 `0..6`；Fast/Reasoning 未单独设置时继承 |
+| `HARNESS_FAST_MODEL_TIMEOUT_SECONDS` | A | `180` | Fast 模型单次请求 timeout，合法 `30..1800` 秒 |
+| `HARNESS_FAST_MODEL_MAX_RETRIES` | A | `2` | Fast 模型重试次数，合法 `0..6` |
+| `HARNESS_REASONING_MODEL_TIMEOUT_SECONDS` | A | `300` | Deep Read/Synthesis 模型单次请求 timeout，合法 `30..1800` 秒 |
+| `HARNESS_REASONING_MODEL_MAX_RETRIES` | A | `2` | Reasoning 模型重试次数，合法 `0..6` |
+| `HARNESS_NETWORK_MAX_ATTEMPTS` | A | `3` | Provider、网页和 arXiv PDF 的总尝试次数，合法 `1..8` |
+| `HARNESS_NETWORK_CONNECT_TIMEOUT_SECONDS` | A | `20` | 通用连接 timeout，合法 `1..300` 秒 |
+| `HARNESS_NETWORK_READ_TIMEOUT_SECONDS` | A | `180` | 通用读取 timeout，合法 `5..1800` 秒 |
+| `HARNESS_NETWORK_BACKOFF_SECONDS` | A | `2` | 通用指数退避起始秒数，合法 `0..120` |
+| `HARNESS_NETWORK_MAX_BACKOFF_SECONDS` | A | `30` | 通用退避上限，合法 `0..600` 秒 |
+| `HARNESS_S2_MAX_ATTEMPTS` | A | `6` | S2 请求总尝试次数，合法 `1..8` |
+| `HARNESS_S2_CONNECT_TIMEOUT_SECONDS` | A | `20` | S2 连接 timeout，合法 `1..300` 秒 |
+| `HARNESS_S2_READ_TIMEOUT_SECONDS` | A | `90` | S2 读取 timeout，合法 `5..1800` 秒 |
+| `HARNESS_S2_BACKOFF_SECONDS` | A | `5` | S2 普通 timeout/5xx 的指数退避起点 |
+| `HARNESS_S2_MAX_BACKOFF_SECONDS` | A | `60` | S2 普通退避上限 |
+| `HARNESS_S2_REQUEST_INTERVAL_SECONDS` | A | `1.1` | 同一进程、同一 key 两次 S2 请求的最小间隔，合法 `0..60` 秒 |
+| `HARNESS_S2_RATE_LIMIT_BACKOFF_SECONDS` | A | `30` | S2 未返回 `Retry-After` 时的最小 429 等待，合法 `1..600` 秒 |
+| `HARNESS_S2_COOLDOWN_SECONDS` | A | `300` | 429 重试耗尽后的 run 级冷却时间，合法 `1..86400` 秒；到期自动重试 |
 | `--allow-single-model-fallback` | A | `false` | 明确允许 Fast 模型兼任 Reasoning；seed5/standard/literature50 缺少 Reasoning 配置且未传此项会失败 |
 | `--profile` | A | `standard` | `smoke`、`seed5`、`standard` 或 `literature50` |
 | `--seed-manifest` | A | `seed5` 自动使用主题目录的 `seed-papers.yaml` | 精确 arXiv 身份冷启动；传给正式 profile 时优先进入 Skim/Deep Read |

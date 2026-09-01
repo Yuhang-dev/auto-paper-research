@@ -232,6 +232,50 @@ class PaperSourceAcquirerTests(unittest.TestCase):
         self.assertTrue((self.root / result.relative_path).is_file())
         self.assertTrue(result.relative_path.startswith("sources/papers/"))
 
+    def test_arxiv_pdf_timeout_retries_an_approved_fallback_endpoint(self) -> None:
+        class Response:
+            headers = {"Content-Length": "18"}
+
+            def __init__(self):
+                self.parts = [b"%PDF-1.7\nfixture\n", b""]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def geturl(self):
+                return "https://export.arxiv.org/pdf/2601.00001.pdf"
+
+            def read(self, size):
+                del size
+                return self.parts.pop(0)
+
+        acquirer = ArxivPaperSourceAcquirer(
+            self.root,
+            max_attempts=3,
+            backoff_seconds=0,
+        )
+        candidate = {
+            "candidate_id": "arxiv:2601.00001",
+            "source": "arxiv",
+            "source_id": "2601.00001",
+            "review_state": "selected-for-ingest",
+        }
+        with mock.patch(
+            "research_harness.paper_sources.urllib.request.urlopen",
+            side_effect=[TimeoutError("read timed out"), Response()],
+        ) as requested:
+            result = acquirer.acquire(candidate)
+
+        self.assertEqual(2, requested.call_count)
+        self.assertTrue(result.downloaded)
+        self.assertEqual(
+            "https://export.arxiv.org/pdf/2601.00001.pdf",
+            result.source_url,
+        )
+
     def test_unselected_candidate_is_rejected_without_network(self) -> None:
         acquirer = ArxivPaperSourceAcquirer(self.root)
         with self.assertRaisesRegex(PaperSourceError, "selected-for-ingest"):
