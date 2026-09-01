@@ -221,6 +221,10 @@ def source_is_survey(source: SourceRecord) -> bool:
     return bool(SURVEY_TITLE.search(source.title))
 
 
+def source_is_review_seed(source: SourceRecord) -> bool:
+    return source.metadata.get("review_seed") is True
+
+
 def source_identity(source: SourceRecord) -> str:
     if source.source_type == "paper":
         if source.doi:
@@ -410,9 +414,12 @@ def select_for_skim(
     ranked = []
     for source_id, screening in screenings.items():
         source = by_id.get(source_id)
-        if source is None or screening.label == "exclude":
+        if source is None or (
+            screening.label == "exclude" and not source_is_review_seed(source)
+        ):
             continue
-        ranked.append((screening.ranking_score, source, source_id))
+        seed_bonus = 2.0 if source_is_review_seed(source) else 0.0
+        ranked.append((screening.ranking_score + seed_bonus, source, source_id))
     ranked.sort(key=lambda item: (-item[0], source_identity(item[1]), item[2]))
     if config.source_role_targets or config.minimum_paper_skims:
         type_limits = _type_limits(selection_limit, config)
@@ -525,6 +532,8 @@ def select_for_deep_read(
             continue
         role = "project" if source.source_type == "project" else skim.source_role
         score = skim.relevance_score + 0.2
+        if source_is_review_seed(source):
+            score += 2.0
         score += min(len(skim.target_facets), 5) * 0.01
         if source_is_survey(source):
             score -= 0.25

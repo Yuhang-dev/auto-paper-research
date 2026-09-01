@@ -219,11 +219,20 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     review_start.add_argument("--run-id")
     review_start.add_argument(
         "--profile",
-        choices=("smoke", "standard", "literature50"),
+        choices=("smoke", "seed5", "standard", "literature50"),
         default="standard",
         help=(
-            "smoke runs 8→4→2; standard runs 50→20→10; literature50 "
-            "requires at least 50 unique paper skims before readiness"
+            "smoke runs 8→4→2; seed5 deep-reads five curated papers without "
+            "provider discovery; standard runs 50→20→10; literature50 requires "
+            "at least 50 unique paper skims before readiness"
+        ),
+    )
+    review_start.add_argument(
+        "--seed-manifest",
+        type=Path,
+        help=(
+            "Curated exact-identity paper manifest. seed5 defaults to "
+            "research/<research-id>/seed-papers.yaml."
         ),
     )
     review_start.add_argument("--allow-network", action="store_true")
@@ -1246,6 +1255,7 @@ def _review_state_payload(
         if synthesis_draft
         else 0
     )
+    configured_seed_ids = set(store.config.seed_source_ids)
     role_counts: Dict[str, int] = {}
     for skim in skims:
         role_counts[skim.source_role] = role_counts.get(skim.source_role, 0) + 1
@@ -1279,6 +1289,9 @@ def _review_state_payload(
         "round_number": int(state.get("round_number") or 0),
         "funnel": {
             "sources": len(sources),
+            "seed_sources": sum(
+                item.source_id in configured_seed_ids for item in sources
+            ),
             "paper_sources": sum(
                 item.source_type == "paper" for item in sources
             ),
@@ -1339,22 +1352,38 @@ def _run_review_start(
     from .review_control import ReviewController
     from .model_client import ReviewModelBundle
     from .progress import ConsoleProgress
-    from .review_models import ReviewRunConfig
+    from .review_models import ReviewRunConfig, SourceScreening
     from .review_semantics import LangChainReviewSemanticEngine
-    from .review_storage import ReviewArtifactStore, load_review_scope
+    from .review_storage import (
+        ReviewArtifactStore,
+        load_review_scope,
+        load_review_seed_sources,
+    )
 
     if not args.allow_network:
         raise ValueError("research review start/canary requires --allow-network")
     scope = load_review_scope(settings, args.research_id)
+    profile = "smoke" if canary else args.profile
+    seed_manifest = getattr(args, "seed_manifest", None)
+    if profile == "seed5" and seed_manifest is None:
+        seed_manifest = (
+            settings.research_root / args.research_id / "seed-papers.yaml"
+        )
+    seed_sources = (
+        load_review_seed_sources(settings, args.research_id, seed_manifest)
+        if seed_manifest is not None
+        else ()
+    )
+    if profile == "seed5" and len(seed_sources) != 5:
+        raise ValueError("seed5 requires exactly five curated paper sources")
     bundle = ReviewModelBundle.from_env(
         settings,
         allow_single_model_fallback=bool(args.allow_single_model_fallback),
-        require_reasoning=not canary and args.profile != "smoke",
+        require_reasoning=not canary and profile != "smoke",
     )
     run_id = args.run_id or _review_run_id("review-smoke" if canary else "review")
     thread_id = args.thread or f"review:{args.research_id}:{run_id}"
     args.thread = thread_id
-    profile = "smoke" if canary else args.profile
     config = ReviewRunConfig.for_profile(
         research_id=args.research_id,
         run_id=run_id,
@@ -1364,6 +1393,7 @@ def _run_review_start(
         title=scope.title,
         required_facets=scope.required_facets,
         candidate_hypotheses=scope.candidate_hypotheses,
+        seed_source_ids=tuple(item.source_id for item in seed_sources),
         allow_network=True,
         allow_single_model_fallback=bool(args.allow_single_model_fallback),
         canary=canary,
@@ -1378,6 +1408,27 @@ def _run_review_start(
     )
     semantic_engine = LangChainReviewSemanticEngine(bundle, settings.skills_root)
     store = ReviewArtifactStore(settings, config)
+    if seed_sources:
+        store.initialize()
+        store.write_sources(seed_sources)
+        store.write_screenings(
+            tuple(
+                SourceScreening(
+                    source_id=item.source_id,
+                    source_role=str(
+                        item.metadata.get("source_role") or "primary-study"
+                    ),
+                    label="core",
+                    relevance_score=1.0,
+                    evidence_potential=1.0,
+                    engineering_value=0.9,
+                    counterevidence_value=0.7,
+                    reason=str(item.metadata["selection_rationale"]),
+                    target_facets=item.target_facets,
+                )
+                for item in seed_sources
+            )
+        )
     with ConsoleProgress(path=store.progress_path) as progress:
         with ReviewController(
             settings,

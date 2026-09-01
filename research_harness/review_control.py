@@ -29,6 +29,7 @@ from .review_logic import (
     search_saturated,
     select_for_deep_read,
     select_for_skim_round,
+    source_is_review_seed,
     stable_id,
 )
 from .review_errorbook import aggregate_review_error_book
@@ -662,6 +663,61 @@ def build_review_graph(
             detail=f"Planning search round {round_number}",
         )
         existing_sources = store.sources()
+        if config.profile == "seed5":
+            present_seed_ids = {
+                item.source_id
+                for item in existing_sources
+                if source_is_review_seed(item)
+            }
+            if present_seed_ids != set(config.seed_source_ids):
+                raise ValueError(
+                    "seed5 requires all configured seed sources in the run manifest"
+                )
+            method_families = {
+                family for skim in store.skims() for family in skim.method_families
+            }
+            blocking_open = {
+                item.uncertainty_id
+                for item in store.uncertainties()
+                if item.blocking and item.status == "open"
+            }
+            coverage = store.coverage()
+            covered_facets = (
+                {item.facet for item in coverage.facets if item.status == "covered"}
+                if coverage
+                else set()
+            )
+            evidence_sources = {item.source_id for item in store.cards()}
+            technology_map = store.technology_map()
+            confirmed_relations = {
+                str(item.get("relation_id"))
+                for item in technology_map.get("relation_candidates", [])
+                if isinstance(item, Mapping) and item.get("status") == "confirmed"
+            }
+            sequence = _append_trajectory(
+                store,
+                state,
+                stage="retrieval",
+                action=(
+                    f"Loaded {len(existing_sources)} curated seed papers by exact "
+                    "arXiv identity; provider discovery was skipped."
+                ),
+                evidence_gained=tuple(item.source_id for item in existing_sources),
+            )
+            return {
+                "phase": "screening",
+                "round_number": round_number,
+                "source_ids": [item.source_id for item in existing_sources],
+                "round_start": {
+                    "cards": len(store.cards()),
+                    "method_families": sorted(method_families),
+                    "blocking_open": sorted(blocking_open),
+                    "evidence_sources": sorted(evidence_sources),
+                    "covered_facets": sorted(covered_facets),
+                    "confirmed_relations": sorted(confirmed_relations),
+                },
+                "trajectory_sequence": sequence,
+            }
         prior_queries = store.queries()
         remaining_query_budget = max(0, config.max_queries - len(prior_queries))
         if remaining_query_budget == 0:
@@ -901,6 +957,20 @@ def build_review_graph(
                             source_id=source.source_id,
                         )
                     else:
+                        if source_is_review_seed(source):
+                            source_role = str(
+                                source.metadata.get("source_role") or "primary-study"
+                            )
+                            result = result.model_copy(
+                                update={
+                                    "source_role": source_role,
+                                    "label": "core",
+                                    "relevance_score": max(
+                                        0.95, result.relevance_score
+                                    ),
+                                    "select_for_deep_read": True,
+                                }
+                            )
                         existing[result.source_id] = result
                         store.write_skims(tuple(existing.values()))
                     processed += 1
@@ -1058,7 +1128,14 @@ def build_review_graph(
         ranked = select_for_deep_read(tuple(sources.values()), skims, config)
         target_total = min(
             config.max_deep_reads,
-            math.ceil(config.max_deep_reads * int(state.get("round_number") or 1) / config.max_search_rounds),
+            max(
+                len(config.seed_source_ids),
+                math.ceil(
+                    config.max_deep_reads
+                    * int(state.get("round_number") or 1)
+                    / config.max_search_rounds
+                ),
+            ),
         )
         selected = tuple(ranked[:target_total])
         selected_sources = [sources[item] for item in selected if item in sources]
@@ -1631,7 +1708,7 @@ class ReviewController:
             self.store.working_root,
             network_concurrency=config.network_concurrency,
         )
-        if providers is None and config.profile != "smoke":
+        if providers is None and config.profile not in {"smoke", "seed5"}:
             self.providers.require_standard_sources()
         self.persistence = HarnessPersistence(settings)
         self.progress = progress or NullProgress()

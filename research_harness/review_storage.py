@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import tempfile
@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from .config import HarnessSettings
 from .review_models import (
     EvidenceCard,
+    DiscoveryRecord,
     NonConsensusAssessment,
     PromotionManifest,
     QueryPlan,
@@ -212,6 +213,115 @@ def load_review_scope(settings: HarnessSettings, research_id: str) -> ReviewScop
         candidate_hypotheses=hypotheses,
         seed_queries=tuple(seed_queries[:12]),
     )
+
+
+def load_review_seed_sources(
+    settings: HarnessSettings,
+    research_id: str,
+    manifest_path: Path,
+) -> tuple[SourceRecord, ...]:
+    """Load a curated, exact-identity paper seed manifest for a review run."""
+
+    path = (
+        manifest_path
+        if manifest_path.is_absolute()
+        else settings.repository_root / manifest_path
+    ).resolve()
+    if not _is_within(path, settings.repository_root.resolve()):
+        raise ValueError("review seed manifest must stay inside the repository")
+    if not path.is_file() or path.suffix.casefold() not in {".yaml", ".yml"}:
+        raise FileNotFoundError(f"Review seed manifest not found: {path}")
+    payload = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    if not isinstance(payload, Mapping):
+        raise ValueError("review seed manifest must contain a YAML mapping")
+    if payload.get("schema_version") != "review-seeds-0.1":
+        raise ValueError("review seed manifest schema_version must be review-seeds-0.1")
+    if str(payload.get("research_id") or "").strip() != research_id:
+        raise ValueError("review seed manifest research_id does not match the run")
+    curated_at = str(payload.get("curated_at") or "").strip()
+    curated_year_match = re.match(r"^(\d{4})-", curated_at)
+    if not curated_year_match:
+        raise ValueError("review seed manifest requires an ISO curated_at timestamp")
+    curated_year = int(curated_year_match.group(1))
+    rows = payload.get("sources") or []
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("review seed manifest requires at least one source")
+    result = []
+    for rank, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"review seed source {rank} must be a mapping")
+        arxiv_id = str(row.get("arxiv_id") or "").strip()
+        if not re.fullmatch(r"\d{4}\.\d{4,5}", arxiv_id):
+            raise ValueError(f"review seed source {rank} has an invalid arXiv ID")
+        title = " ".join(str(row.get("title") or "").split())
+        if not title:
+            raise ValueError(f"review seed source {rank} requires a title")
+        year = int(row.get("year") or 0)
+        if year < curated_year - 2 or year > curated_year:
+            raise ValueError(
+                f"review seed {arxiv_id} must be from the curation year or prior two years"
+            )
+        authors = tuple(
+            " ".join(str(item).split())
+            for item in (row.get("authors") or [])
+            if str(item).strip()
+        )
+        if not authors:
+            raise ValueError(f"review seed {arxiv_id} requires authors")
+        source_role = str(row.get("source_role") or "primary-study").strip()
+        if source_role not in {
+            "survey",
+            "primary-study",
+            "benchmark",
+            "reproduction",
+            "background",
+        }:
+            raise ValueError(f"review seed {arxiv_id} has an invalid source_role")
+        rationale = " ".join(str(row.get("rationale") or "").split())
+        if not rationale:
+            raise ValueError(f"review seed {arxiv_id} requires a rationale")
+        target_facets = tuple(
+            dict.fromkeys(
+                " ".join(str(item).split())
+                for item in (row.get("target_facets") or [])
+                if str(item).strip()
+            )
+        )
+        result.append(
+            SourceRecord(
+                source_id=f"paper:arxiv:{arxiv_id}",
+                source_type="paper",
+                provider="manual",
+                title=title,
+                canonical_url=f"https://arxiv.org/abs/{arxiv_id}",
+                authors=authors,
+                year=year,
+                venue=(str(row.get("venue") or "").strip() or None),
+                snippet=rationale,
+                arxiv_id=arxiv_id,
+                pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
+                repository=(str(row.get("repository") or "").strip() or None),
+                version="arxiv-latest-at-seed-run",
+                target_facets=target_facets,
+                discoveries=(
+                    DiscoveryRecord(
+                        query_id=f"SEED{rank:02d}",
+                        provider="manual",
+                        rank=rank,
+                        retrieved_at=curated_at,
+                    ),
+                ),
+                metadata={
+                    "review_seed": True,
+                    "source_role": source_role,
+                    "selection_rationale": rationale,
+                },
+            )
+        )
+    identifiers = [item.source_id for item in result]
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("review seed manifest contains duplicate arXiv IDs")
+    return tuple(sorted(result, key=lambda item: item.source_id))
 
 
 class ReviewArtifactStore:

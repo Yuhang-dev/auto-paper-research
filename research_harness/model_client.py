@@ -92,7 +92,7 @@ class ReviewModelBundle:
         if not reasoning_complete:
             if require_reasoning and not allow_single_model_fallback:
                 raise ValueError(
-                    "The standard review profile requires a reasoning-model profile. "
+                    "This review profile requires a reasoning-model profile. "
                     "Configure HARNESS_REASONING_* or explicitly use "
                     "--allow-single-model-fallback"
                 )

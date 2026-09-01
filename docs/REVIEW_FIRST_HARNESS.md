@@ -27,8 +27,16 @@ Skim 只用于筛选和导航，不能作为报告证据。
 | Profile | 去重来源 | Skim | Deep Read | Wiki 候选 |
 |---|---:|---:|---:|---:|
 | `smoke` | 8 | 4 | 2 | 0 |
+| `seed5` | 固定 5 篇论文 | 5 | 5 | 5 |
 | `standard` | 50 | 20 | 10 | 最多 6 |
 | `literature50` | 110 | 60，其中至少 50 篇论文 | 15，其中至少 13 篇论文 | 最多 6 |
+
+`seed5` 是正式调研前的冷启动入口。它读取
+`research/<research-id>/seed-papers.yaml` 中人工选定的精确 arXiv 身份，跳过 provider
+宽检索，让 5 篇论文全部完成 Skim、PDF Deep Read 和 EvidenceCard 抽取。随后仍需
+人工批准 Promotion Manifest，再执行 Full Ingest、独立证据复核、staging 和正式
+Wiki 发布。相同 manifest 传给 `literature50` 后，这 5 篇会被确定性优先纳入 Skim
+和 Deep Read，成为第一轮理解基线；模型上下文只接收本轮选中的材料与证据卡。
 
 标准来源软配额为论文 30、GitHub/项目 10、一般 Web 10。论文发现由 DeepXiv
 承担；Semantic Scholar 不参与宽检索，也不增加来源数量。它只在漏斗已经选出
@@ -216,6 +224,49 @@ Fast Loop 使用显式绑定，不存在智能 Skill Router：
 
 ## 8. CLI
 
+5 篇冷启动、晋升与正式 Wiki 发布：
+
+```powershell
+$seedRun = "seed5-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+$seedManifest = "research\long-context-sparse-models\seed-papers.yaml"
+
+python -B -m research_harness research review start `
+  long-context-sparse-models `
+  --run-id $seedRun `
+  --thread $seedRun `
+  --profile seed5 `
+  --seed-manifest $seedManifest `
+  --allow-network `
+  --format json
+```
+
+先检查：
+
+```powershell
+$promotion = "research\long-context-sparse-models\reviews\$seedRun\promotion-manifest.yaml"
+Get-Content $promotion
+```
+
+把 5 个确认项的 `approved` 改为 `true`、`status` 改为 `approved` 后执行：
+
+```powershell
+python -B -m research_harness research review promote `
+  long-context-sparse-models `
+  --thread $seedRun `
+  --manifest $promotion `
+  --execute `
+  --allow-network `
+  --format json
+
+python -B -m research_harness research publish-staged `
+  long-context-sparse-models `
+  --run-id $seedRun `
+  --target formal `
+  --preview
+
+# Preview 通过后，去掉 --preview 正式发布。
+```
+
 联网 smoke：
 
 ```powershell
@@ -251,6 +302,7 @@ python -B -m research_harness research review start `
   --run-id $runId `
   --thread $runId `
   --profile literature50 `
+  --seed-manifest "research\long-context-sparse-models\seed-papers.yaml" `
   --allow-network `
   --format json
 ```

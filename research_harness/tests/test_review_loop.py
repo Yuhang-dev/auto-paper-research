@@ -78,7 +78,10 @@ from research_harness.review_providers import (
     _semantic_scholar_paper_batch,
     _semantic_scholar_paper_details,
 )
-from research_harness.review_storage import ReviewArtifactStore
+from research_harness.review_storage import (
+    ReviewArtifactStore,
+    load_review_seed_sources,
+)
 from research_harness.review_semantics import (
     LangChainReviewSemanticEngine,
     _invoke_structured,
@@ -488,6 +491,24 @@ class ReviewLoopTests(unittest.TestCase):
             created_at=NOW,
         )
 
+    def _seed5_config(self, sources, run_id="seed5-run", thread_id="seed5-thread"):
+        return ReviewRunConfig.for_profile(
+            research_id=self.scope.research_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            profile="seed5",
+            question=self.scope.question,
+            title=self.scope.title,
+            required_facets=self.scope.required_facets,
+            candidate_hypotheses=self.scope.candidate_hypotheses,
+            seed_source_ids=tuple(item.source_id for item in sources),
+            allow_network=False,
+            allow_single_model_fallback=False,
+            canary=False,
+            stop_after="synthesis",
+            created_at=NOW,
+        )
+
     def _providers(self, config):
         store = ReviewArtifactStore(self.settings, config)
         return ReviewProviderRegistry(
@@ -542,6 +563,85 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertEqual(8, config.minimum_evidenced_claims)
         self.assertEqual(4, config.max_search_rounds)
         self.assertEqual(24, config.max_queries)
+
+    def test_seed_manifest_loads_exact_recent_arxiv_identities(self):
+        manifest = self.root / "seed-papers.yaml"
+        manifest.write_text(
+            """schema_version: review-seeds-0.1
+research_id: sparse-review
+curated_at: '2026-09-01T00:00:00Z'
+sources:
+  - arxiv_id: '2501.00001'
+    title: Seed Sparse Attention
+    authors: [Ada Example]
+    year: 2025
+    venue: TestConf 2025
+    source_role: primary-study
+    rationale: Exact paper selected for cold-start evidence.
+    target_facets: [technical-taxonomy]
+""",
+            encoding="utf-8",
+        )
+        sources = load_review_seed_sources(
+            self.settings,
+            self.scope.research_id,
+            manifest,
+        )
+        self.assertEqual(("paper:arxiv:2501.00001",), tuple(item.source_id for item in sources))
+        self.assertTrue(sources[0].metadata["review_seed"])
+        self.assertEqual("manual", sources[0].provider)
+
+    def test_seed5_skips_discovery_and_deep_reads_all_five(self):
+        sources = tuple(
+            _paper_source(index).model_copy(
+                update={
+                    "metadata": {
+                        "review_seed": True,
+                        "source_role": "primary-study",
+                        "selection_rationale": "Curated cold-start paper.",
+                    }
+                }
+            )
+            for index in range(1, 6)
+        )
+        config = self._seed5_config(sources)
+        store = ReviewArtifactStore(self.settings, config)
+        store.initialize()
+        store.write_sources(sources)
+        for source in sources:
+            store.write_material(
+                SourceMaterial(
+                    source_id=source.source_id,
+                    media_type="pdf-text",
+                    sha256=hashlib.sha256(source.source_id.encode()).hexdigest(),
+                    text="Located seed paper evidence on page one.",
+                    local_path=f"sources/{source.arxiv_id}.pdf",
+                    page_count=1,
+                    selected_pages=(1,),
+                    acquired_at=NOW,
+                )
+            )
+        provider = FakeTavilyProvider()
+        providers = ReviewProviderRegistry(
+            self.settings.repository_root,
+            store.working_root,
+            providers={"tavily": provider},
+            network_concurrency=2,
+        )
+        with ReviewController(
+            self.settings,
+            config=config,
+            scope=self.scope,
+            semantic_engine=FakeReviewEngine(),
+            providers=providers,
+        ) as controller:
+            state = controller.start()
+        self.assertTrue(state["completed"])
+        self.assertEqual(0, provider.calls)
+        self.assertEqual(5, len(store.skims()))
+        self.assertEqual(5, len(store.deep_read_completed()))
+        self.assertEqual(5, len(store.cards()))
+        self.assertEqual(5, len(store.load_promotion_manifest().items))
 
     def test_evidence_extraction_repairs_invalid_structured_output_once(self):
         valid = EvidenceExtraction(

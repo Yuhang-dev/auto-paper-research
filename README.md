@@ -50,6 +50,11 @@ ResearchGate、Academia.edu 等镜像用于导航，正式证据来自原始论�
 关系候选，只有精确 DOI/arXiv/repository/URL 身份会自动合并。
 使用说明见 `docs/REVIEW_FIRST_HARNESS.md`。
 
+正式调研前可运行 `seed5` 冷启动。主题目录中的 `seed-papers.yaml` 固定 5 篇近年
+代表论文，跳过宽检索并全部完成 Skim、Deep Read 和 EvidenceCard；人工批准后再沿用
+Promotion → Full Ingest → Verify → staged → publish 写入 Wiki。正式
+`literature50` 继续传入同一 manifest，使这些论文成为首轮证据基线。
+
 面向正式大规模综述的 `literature50` profile 使用 `110 个候选来源 → 60 个 Skim
 （其中至少 50 篇去重论文）→ 15 个 Deep Read（其中至少 13 篇论文）→ 最多 6 篇晋升`。
 它保留 100 个论文发现名额和每轮 4 个 DeepXiv Query，为跨查询去重留出余量；报告会

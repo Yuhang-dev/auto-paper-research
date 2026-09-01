@@ -1482,6 +1482,8 @@ def build_promotion_manifest(
         ):
             continue
         cited = [item for item in source_cards if item.card_id in report_card_ids]
+        if config.profile == "seed5" and source_id in config.seed_source_ids:
+            cited = list(source_cards)
         if not cited:
             continue
         verified_bonus = sum(item.status == "verified" for item in source_cards)
@@ -1507,8 +1509,13 @@ def build_promotion_manifest(
                 source_id=source.source_id,
                 evidence_card_ids=tuple(sorted(item.card_id for item in source_cards)),
                 rationale=(
-                    f"Report-critical paper with {len(cited)} cited and "
-                    f"{len(source_cards)} retained evidence cards across: "
+                    (
+                        "Curated cold-start seed with "
+                        if config.profile == "seed5"
+                        else "Report-critical paper with "
+                    )
+                    + f"{len(cited)} cited and "
+                    + f"{len(source_cards)} retained evidence cards across: "
                     f"{', '.join(facets) or 'unclassified facets'}."
                 ),
             )

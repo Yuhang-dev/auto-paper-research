@@ -127,8 +127,9 @@ Key 不得写入 `.env`、Search Run YAML、Wiki、SQLite memory、命令参数�
 | `HARNESS_REASONING_MODEL` | A | 无 | Deep Read、EvidenceCard、reasoning、synthesis 模型 |
 | `HARNESS_REASONING_MODEL_BASE_URL` | A | 无 | Reasoning endpoint |
 | `HARNESS_REASONING_API_KEY` | A | 无 | Reasoning endpoint 凭证 |
-| `--allow-single-model-fallback` | A | `false` | 明确允许 Fast 模型兼任 Reasoning；standard/literature50 缺少 Reasoning 配置且未传此项会失败 |
-| `--profile` | A | `standard` | `smoke`、`standard` 或 `literature50` |
+| `--allow-single-model-fallback` | A | `false` | 明确允许 Fast 模型兼任 Reasoning；seed5/standard/literature50 缺少 Reasoning 配置且未传此项会失败 |
+| `--profile` | A | `standard` | `smoke`、`seed5`、`standard` 或 `literature50` |
+| `--seed-manifest` | A | `seed5` 自动使用主题目录的 `seed-papers.yaml` | 精确 arXiv 身份冷启动；传给正式 profile 时优先进入 Skim/Deep Read |
 | `--stop-after` | A | `synthesis` | 在指定 Review stage 后有界停止 |
 | `--thread` | R | 必填 | SQLite checkpoint 身份 |
 | `--run-id` | R | 自动生成 | artifact 身份；必须为安全 ASCII 文件名 |
@@ -136,26 +137,26 @@ Key 不得写入 `.env`、Search Run YAML、Wiki、SQLite memory、命令参数�
 
 V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 CLI 覆盖：
 
-| 参数 | 类别 | smoke | standard | literature50 |
-|---|---|---:|---:|---:|
-| `max_sources` | I | 8 | 50 | 110 |
-| `max_skims` | I | 4 | 20；三轮 7 / 14 / 20 | 60；四轮 15 / 30 / 45 / 60 |
-| `minimum_paper_skims` | I | 0 | 0 | 50 |
-| `max_deep_reads` | I | 2 | 10 | 15 |
-| `minimum_deep_read_papers` | I | 2 | 6 | 13 |
-| `minimum_core_study_deep_reads` | I | 0 | 6 | 12 |
-| `max_survey_deep_reads` | I | 2 | 2 | 2 |
-| `max_nonpaper_deep_reads` | I | 2 | 2 | 2 |
-| source role soft targets | I | 无 | survey 2 / primary 6 / benchmark 2 / reproduction 1 / project 2 | survey 4 / primary 28 / benchmark 8 / reproduction 5 / project 3 |
-| `max_promotions` | I | 0 | 6 | 6 |
-| paper / project / web soft quota | I | 5 / 1 / 2 | 30 / 10 / 10 | 100 / 5 / 5 |
-| `max_search_rounds` | I | 1 | 3 | 4 |
-| `max_queries` | I | 3 | 12 | 24 |
-| `minimum_evidenced_claims` | I | 1 | 1 | 8 |
-| `target_core_findings` | I | 1 | 6 | 8 |
-| network / skim / deep-read concurrency | I | 4 / 2 / 2 | 4 / 2 / 2 | 4 / 2 / 2 |
-| EvidenceCard per source: PDF / repository / Web | I | 8 / 6 / 4 | 8 / 6 / 4 | 8 / 6 / 4 |
-| EvidenceExtraction schema repair attempts | I | 1 | 1 | 1 |
+| 参数 | 类别 | smoke | seed5 | standard | literature50 |
+|---|---|---:|---:|---:|---:|
+| `max_sources` | I | 8 | 5 | 50 | 110 |
+| `max_skims` | I | 4 | 5 | 20；三轮 7 / 14 / 20 | 60；四轮 15 / 30 / 45 / 60 |
+| `minimum_paper_skims` | I | 0 | 5 | 0 | 50 |
+| `max_deep_reads` | I | 2 | 5 | 10 | 15 |
+| `minimum_deep_read_papers` | I | 2 | 5 | 6 | 13 |
+| `minimum_core_study_deep_reads` | I | 0 | 5 | 6 | 12 |
+| `max_survey_deep_reads` | I | 2 | 2 | 2 | 2 |
+| `max_nonpaper_deep_reads` | I | 2 | 0 | 2 | 2 |
+| source role soft targets | I | 无 | 无 | survey 2 / primary 6 / benchmark 2 / reproduction 1 / project 2 | survey 4 / primary 28 / benchmark 8 / reproduction 5 / project 3 |
+| `max_promotions` | I | 0 | 5 | 6 | 6 |
+| paper / project / web soft quota | I | 5 / 1 / 2 | 5 / 0 / 0 | 30 / 10 / 10 | 100 / 5 / 5 |
+| `max_search_rounds` | I | 1 | 1 | 3 | 4 |
+| `max_queries` | I | 3 | 1（seed-only 时不调用 provider） | 12 | 24 |
+| `minimum_evidenced_claims` | I | 1 | 1 | 1 | 8 |
+| `target_core_findings` | I | 1 | 5 | 6 | 8 |
+| network / skim / deep-read concurrency | I | 4 / 2 / 2 | 4 / 2 / 2 | 4 / 2 / 2 | 4 / 2 / 2 |
+| EvidenceCard per source: PDF / repository / Web | I | 8 / 6 / 4 | 8 / 6 / 4 | 8 / 6 / 4 | 8 / 6 / 4 |
+| EvidenceExtraction schema repair attempts | I | 1 | 1 | 1 | 1 |
 
 Evidence extraction limits each source to a compact set of high-value cards. A schema-invalid
 model response receives one bounded repair pass that may remove invalid or incomplete entries

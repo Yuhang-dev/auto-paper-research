@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .text_normalization import normalize_data
 
 
-ReviewProfile = Literal["smoke", "standard", "literature50"]
+ReviewProfile = Literal["smoke", "seed5", "standard", "literature50"]
 SourceType = Literal["paper", "project", "web"]
 SourceRole = Literal[
     "survey",
@@ -89,6 +89,7 @@ class ReviewRunConfig(ReviewModel):
     title: str
     required_facets: Tuple[str, ...]
     candidate_hypotheses: Tuple[str, ...] = ()
+    seed_source_ids: Tuple[str, ...] = ()
     max_sources: int = Field(ge=1, le=500)
     max_skims: int = Field(ge=1, le=200)
     minimum_paper_skims: int = Field(default=0, ge=0, le=200)
@@ -128,6 +129,10 @@ class ReviewRunConfig(ReviewModel):
                 raise ValueError(f"{name} cannot be blank")
         if self.max_skims > self.max_sources:
             raise ValueError("max_skims cannot exceed max_sources")
+        if len(set(self.seed_source_ids)) != len(self.seed_source_ids):
+            raise ValueError("seed_source_ids cannot contain duplicates")
+        if len(self.seed_source_ids) > self.max_sources:
+            raise ValueError("seed_source_ids cannot exceed max_sources")
         if self.max_deep_reads > self.max_skims:
             raise ValueError("max_deep_reads cannot exceed max_skims")
         if self.minimum_paper_skims > self.max_skims:
@@ -200,6 +205,7 @@ class ReviewRunConfig(ReviewModel):
         title: str,
         required_facets: Tuple[str, ...],
         candidate_hypotheses: Tuple[str, ...],
+        seed_source_ids: Tuple[str, ...] = (),
         allow_network: bool,
         allow_single_model_fallback: bool,
         canary: bool,
@@ -231,6 +237,26 @@ class ReviewRunConfig(ReviewModel):
                 "max_queries": 3,
                 "minimum_evidenced_claims": 1,
                 "target_core_findings": 1,
+            }
+        elif profile == "seed5":
+            budgets = {
+                "max_sources": 5,
+                "max_skims": 5,
+                "minimum_paper_skims": 5,
+                "max_deep_reads": 5,
+                "minimum_deep_read_papers": 5,
+                "minimum_core_study_deep_reads": 5,
+                "max_survey_deep_reads": 2,
+                "max_nonpaper_deep_reads": 0,
+                "source_role_targets": {},
+                "max_promotions": 5,
+                "paper_source_quota": 5,
+                "project_source_quota": 0,
+                "web_source_quota": 0,
+                "max_search_rounds": 1,
+                "max_queries": 1,
+                "minimum_evidenced_claims": 1,
+                "target_core_findings": 5,
             }
         elif profile == "standard":
             budgets = {
@@ -293,6 +319,7 @@ class ReviewRunConfig(ReviewModel):
             title=title,
             required_facets=required_facets,
             candidate_hypotheses=candidate_hypotheses,
+            seed_source_ids=seed_source_ids,
             allow_network=allow_network,
             allow_single_model_fallback=allow_single_model_fallback,
             fast_model=fast_model,

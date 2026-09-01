@@ -1,0 +1,143 @@
+schema_version: review-seeds-0.1
+research_id: long-context-sparse-models
+curated_at: "2026-09-01T00:00:00Z"
+
+# Five recent primary studies chosen to initialize distinct technical routes.
+# The set supplies a reproducible cold-start baseline for the broader review.
+sources:
+  - arxiv_id: "2407.02490"
+    title: "MInference 1.0: Accelerating Pre-filling for Long-Context LLMs via Dynamic Sparse Attention"
+    authors:
+      - Huiqiang Jiang
+      - Yucheng Li
+      - Chengruidong Zhang
+      - Qianhui Wu
+      - Xufang Luo
+      - Surin Ahn
+      - Zhenhua Han
+      - Amir H. Abdi
+      - Dongsheng Li
+      - Chin-Yew Lin
+      - Yuqing Yang
+      - Lili Qiu
+    year: 2024
+    venue: "NeurIPS 2024 Spotlight"
+    source_role: primary-study
+    repository: "https://github.com/microsoft/MInference"
+    rationale: "Representative post-training dynamic sparse attention for long-context prefill, with optimized GPU kernels and multiple long-context benchmarks."
+    target_facets:
+      - technical-taxonomy
+      - static-vs-dynamic
+      - prefill-vs-decode
+      - quality-metrics
+      - latency-throughput
+      - kernels-and-hardware
+      - open-source-implementations
+      - limitations-and-counter-evidence
+
+  - arxiv_id: "2406.10774"
+    title: "Quest: Query-Aware Sparsity for Efficient Long-Context LLM Inference"
+    authors:
+      - Jiaming Tang
+      - Yilong Zhao
+      - Kan Zhu
+      - Guangxuan Xiao
+      - Baris Kasikci
+      - Song Han
+    year: 2024
+    venue: "ICML 2024"
+    source_role: primary-study
+    repository: "https://github.com/mit-han-lab/Quest"
+    rationale: "Representative query-aware KV-page selection method that exposes decode latency, KV traffic, and accuracy trade-offs."
+    target_facets:
+      - technical-taxonomy
+      - static-vs-dynamic
+      - prefill-vs-decode
+      - quality-metrics
+      - latency-throughput
+      - memory-and-kv-cache
+      - open-source-implementations
+      - limitations-and-counter-evidence
+
+  - arxiv_id: "2410.10819"
+    title: "DuoAttention: Efficient Long-Context LLM Inference with Retrieval and Streaming Heads"
+    authors:
+      - Guangxuan Xiao
+      - Jiaming Tang
+      - Jingwei Zuo
+      - Junxian Guo
+      - Shang Yang
+      - Haotian Tang
+      - Yao Fu
+      - Song Han
+    year: 2024
+    venue: "ICLR 2025"
+    source_role: primary-study
+    repository: "https://github.com/mit-han-lab/duo-attention"
+    rationale: "Head-level separation of retrieval and streaming behavior provides a distinct KV-cache and prefill/decode design point."
+    target_facets:
+      - technical-taxonomy
+      - static-vs-dynamic
+      - prefill-vs-decode
+      - quality-metrics
+      - latency-throughput
+      - memory-and-kv-cache
+      - open-source-implementations
+      - limitations-and-counter-evidence
+
+  - arxiv_id: "2502.11089"
+    title: "Native Sparse Attention: Hardware-Aligned and Natively Trainable Sparse Attention"
+    authors:
+      - Jingyang Yuan
+      - Huazuo Gao
+      - Damai Dai
+      - Junyu Luo
+      - Liang Zhao
+      - Zhengyan Zhang
+      - Zhenda Xie
+      - Y. X. Wei
+      - Lean Wang
+      - Zhiping Xiao
+      - Yuqing Wang
+      - Chong Ruan
+      - Ming Zhang
+      - Wenfeng Liang
+      - Wangding Zeng
+    year: 2025
+    venue: "arXiv"
+    source_role: primary-study
+    rationale: "Representative natively trainable, hierarchical, hardware-aligned sparse architecture spanning training, forward, backward, and decode."
+    target_facets:
+      - technical-taxonomy
+      - static-vs-dynamic
+      - prefill-vs-decode
+      - synthetic-vs-real-tasks
+      - quality-metrics
+      - latency-throughput
+      - memory-and-kv-cache
+      - kernels-and-hardware
+      - limitations-and-counter-evidence
+
+  - arxiv_id: "2502.18137"
+    title: "SpargeAttention: Accurate and Training-free Sparse Attention Accelerating Any Model Inference"
+    authors:
+      - Jintao Zhang
+      - Chendong Xiang
+      - Haofeng Huang
+      - Jia Wei
+      - Haocheng Xi
+      - Jun Zhu
+      - Jianfei Chen
+    year: 2025
+    venue: "ICML 2025"
+    source_role: primary-study
+    rationale: "Representative training-free online block filtering and quantized sparse kernel, useful for separating algorithmic sparsity from realized speedup."
+    target_facets:
+      - technical-taxonomy
+      - static-vs-dynamic
+      - prefill-vs-decode
+      - quality-metrics
+      - latency-throughput
+      - kernels-and-hardware
+      - open-source-implementations
+      - limitations-and-counter-evidence
