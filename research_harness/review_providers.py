@@ -349,23 +349,37 @@ class SemanticScholarProvider:
         self.api_key = api_key.strip()
         self._request_lock = threading.Lock()
         self._last_request_started = 0.0
+        self._rate_limit_circuit_open = False
+
+    @property
+    def rate_limit_circuit_open(self) -> bool:
+        return self._rate_limit_circuit_open
 
     def _request(self, identifier: str) -> Mapping[str, Any]:
         with self._request_lock:
+            if self._rate_limit_circuit_open:
+                return {}
             wait_seconds = 1.0 - (time.monotonic() - self._last_request_started)
             if wait_seconds > 0:
                 time.sleep(wait_seconds)
             self._last_request_started = time.monotonic()
-            return _semantic_scholar_paper_details(
-                identifier,
-                self.api_key,
-            )
+            try:
+                return _semantic_scholar_paper_details(
+                    identifier,
+                    self.api_key,
+                )
+            except RuntimeError as exc:
+                if "Semantic Scholar HTTP 429" in str(exc):
+                    self._rate_limit_circuit_open = True
+                raise
 
     def _batch_request(
         self,
         identifiers: Sequence[str],
     ) -> tuple[Optional[Mapping[str, Any]], ...]:
         with self._request_lock:
+            if self._rate_limit_circuit_open:
+                return tuple(None for _ in identifiers)
             wait_seconds = 1.0 - (time.monotonic() - self._last_request_started)
             if wait_seconds > 0:
                 time.sleep(wait_seconds)
@@ -377,7 +391,10 @@ class SemanticScholarProvider:
                         self.api_key,
                     )
                 except RuntimeError as exc:
-                    if "Semantic Scholar HTTP 429" not in str(exc) or attempt == 1:
+                    rate_limited = "Semantic Scholar HTTP 429" in str(exc)
+                    if not rate_limited or attempt == 1:
+                        if rate_limited:
+                            self._rate_limit_circuit_open = True
                         raise
                     time.sleep(2.0)
             raise RuntimeError("Semantic Scholar batch retry exhausted")
@@ -436,6 +453,8 @@ class SemanticScholarProvider:
         identifier = _semantic_scholar_identifier(source)
         if not identifier:
             return source
+        if self._rate_limit_circuit_open:
+            return source
         # Details are fetched only after deterministic deep-read selection,
         # never during broad discovery or skim.
         payload = await asyncio.to_thread(self._request, identifier)
@@ -448,6 +467,8 @@ class SemanticScholarProvider:
         sources: Sequence[SourceRecord],
     ) -> dict[str, SourceRecord]:
         result = {item.source_id: item for item in sources}
+        if self._rate_limit_circuit_open:
+            return result
         pending = []
         for source in sources:
             if source.source_type != "paper":

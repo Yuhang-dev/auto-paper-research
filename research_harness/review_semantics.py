@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import Counter, defaultdict
 from typing import Any, Mapping, Optional, Protocol, Sequence, Type, TypeVar
@@ -355,6 +356,8 @@ class LangChainReviewSemanticEngine:
     ) -> QueryPlan:
         skill = self.registry.get("search-paper")
         remaining = max(1, config.max_queries - len(prior_queries))
+        rounds_left = max(1, config.max_search_rounds - round_number + 1)
+        round_query_limit = min(6, remaining, max(1, math.ceil(remaining / rounds_left)))
         prioritized_uncertainties = sorted(
             (item for item in uncertainties if item.status == "open"),
             key=lambda item: (-item.priority, item.uncertainty_id),
@@ -376,7 +379,7 @@ class LangChainReviewSemanticEngine:
                 "prior_queries": _payload(prior_queries),
                 "enabled_providers": list(enabled_providers),
                 "constraints": {
-                    "maximum_queries": min(6, remaining),
+                    "maximum_queries": round_query_limit,
                     "target_only_the_three_highest_priority_gaps": True,
                     "at_least_one_primary_paper_query": "deepxiv",
                     "project_gap_provider": "github",
@@ -390,7 +393,7 @@ class LangChainReviewSemanticEngine:
         )
         normalized = []
         allowed_facets = set(scope.required_facets)
-        for position, item in enumerate(draft.queries[:remaining], start=1):
+        for position, item in enumerate(draft.queries[:round_query_limit], start=1):
             if item.provider not in enabled_providers:
                 continue
             facets = tuple(value for value in item.target_facets if value in allowed_facets)
@@ -453,7 +456,7 @@ class LangChainReviewSemanticEngine:
                     ),
                     uncertainty_id=target.uncertainty_id if target else None,
                 )
-                if len(normalized) < min(8, remaining):
+                if len(normalized) < round_query_limit:
                     normalized.append(fallback)
                 else:
                     replace_at = next(
@@ -485,7 +488,7 @@ class LangChainReviewSemanticEngine:
                 target_facets=(target.target_facets if target else scope.required_facets[:2]),
                 uncertainty_id=target.uncertainty_id if target else None,
             )
-            if len(normalized) < min(8, remaining):
+            if len(normalized) < round_query_limit:
                 normalized.append(fallback)
             else:
                 normalized[-1] = fallback
@@ -519,7 +522,7 @@ class LangChainReviewSemanticEngine:
                 target_facets=project_gap.target_facets or scope.required_facets[:2],
                 uncertainty_id=project_gap.uncertainty_id,
             )
-            if len(normalized) < min(8, remaining):
+            if len(normalized) < round_query_limit:
                 normalized.append(fallback)
             else:
                 replace_at = next(
@@ -710,6 +713,19 @@ class LangChainReviewSemanticEngine:
         uncertainties: Sequence[ResearchUncertainty],
     ) -> ReasoningUpdate:
         skill = self.registry.get("review-synthesize")
+        required_nonconsensus_ids = {
+            stable_id("uncertainty", scope.research_id, hypothesis)
+            for hypothesis in scope.candidate_hypotheses
+        }
+        required_nonconsensus = tuple(
+            {
+                "uncertainty_id": item.uncertainty_id,
+                "question": item.question,
+            }
+            for item in uncertainties
+            if item.category == "nonconsensus"
+            and item.uncertainty_id in required_nonconsensus_ids
+        )
         result = _invoke_structured(
             self.reasoning_model,
             ReasoningUpdate,
@@ -726,12 +742,17 @@ class LangChainReviewSemanticEngine:
                 "existing_uncertainties": _payload(uncertainties),
                 "source_skims": _payload(skims),
                 "evidence_cards": _payload(cards),
+                "required_nonconsensus_assessments": required_nonconsensus,
                 "constraints": {
                     "reuse_existing_ids": True,
                     "new_claim_id_prefix": "understanding-claim-",
                     "new_uncertainty_id_prefix": "uncertainty-",
                     "same_paper_configurations_are_not_independent_sources": True,
                     "unsupported_disagreement_result": "insufficient-evidence",
+                    "one_assessment_per_required_nonconsensus_uncertainty": bool(
+                        cards and required_nonconsensus
+                    ),
+                    "copy_assessment_uncertainty_id_exactly": True,
                 },
             },
             repair_once=True,

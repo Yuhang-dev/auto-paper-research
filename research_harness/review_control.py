@@ -183,9 +183,9 @@ def _initial_uncertainties(scope: ReviewScope) -> tuple[ResearchUncertainty, ...
         ResearchUncertainty(
             uncertainty_id=stable_id("uncertainty", scope.research_id, "primary"),
             question=scope.question,
-            category="performance",
+            category="scope",
             priority=1.0,
-            blocking=True,
+            blocking=False,
             next_queries=scope.seed_queries[:2],
         )
     ]
@@ -221,6 +221,15 @@ def _initial_uncertainties(scope: ReviewScope) -> tuple[ResearchUncertainty, ...
     return tuple(values)
 
 
+def _required_nonconsensus_uncertainty_ids(
+    scope: ReviewScope,
+) -> tuple[str, ...]:
+    return tuple(
+        stable_id("uncertainty", scope.research_id, hypothesis)
+        for hypothesis in scope.candidate_hypotheses
+    )
+
+
 def _normalized_text(value: str) -> str:
     return " ".join(value.casefold().split())
 
@@ -244,6 +253,24 @@ def _refresh_review_analysis(
     sources = store.sources()
     skims = store.skims()
     cards = store.cards()
+    primary_uncertainty_id = stable_id("uncertainty", scope.research_id, "primary")
+    uncertainties = tuple(
+        item.model_copy(
+            update={
+                "category": "scope",
+                "blocking": False,
+                "status": "resolved" if cards else item.status,
+                "resolution": (
+                    "The broad scope question is now tracked through evidence-specific gaps."
+                    if cards
+                    else item.resolution
+                ),
+            }
+        )
+        if item.uncertainty_id == primary_uncertainty_id
+        else item
+        for item in uncertainties
+    )
     technology_map = build_technology_map(
         sources=sources,
         skims=skims,
@@ -353,11 +380,37 @@ def _merge_reasoning(
             )
 
     assessments = {item.assessment_id: item for item in existing_assessments}
+    assessments_by_uncertainty = {
+        item.uncertainty_id: item.assessment_id
+        for item in existing_assessments
+        if item.uncertainty_id
+    }
     assessment_questions = {
         _normalized_text(item.question): item.assessment_id
         for item in existing_assessments
     }
+    nonconsensus_uncertainties = {
+        item.uncertainty_id: item
+        for item in existing_uncertainties
+        if item.category == "nonconsensus"
+    }
+    nonconsensus_questions = {
+        _normalized_text(item.question): item.uncertainty_id
+        for item in nonconsensus_uncertainties.values()
+    }
     for raw in update.assessments:
+        uncertainty_id = raw.uncertainty_id
+        if uncertainty_id not in nonconsensus_uncertainties:
+            uncertainty_id = nonconsensus_questions.get(_normalized_text(raw.question))
+        if uncertainty_id:
+            target = nonconsensus_uncertainties[uncertainty_id]
+            raw = raw.model_copy(
+                update={
+                    "assessment_id": stable_id("assessment", uncertainty_id),
+                    "uncertainty_id": uncertainty_id,
+                    "question": target.question,
+                }
+            )
         try:
             raw = normalize_nonconsensus_assessment(
                 raw,
@@ -366,11 +419,17 @@ def _merge_reasoning(
             )
         except ValueError:
             continue
-        assessment_id = assessment_questions.get(
+        assessment_id = (
+            assessments_by_uncertainty.get(raw.uncertainty_id)
+            if raw.uncertainty_id
+            else None
+        ) or assessment_questions.get(
             _normalized_text(raw.question), raw.assessment_id
         )
         normalized = raw.model_copy(update={"assessment_id": assessment_id})
         assessments[assessment_id] = normalized
+        if normalized.uncertainty_id:
+            assessments_by_uncertainty[normalized.uncertainty_id] = assessment_id
         assessment_questions[_normalized_text(normalized.question)] = assessment_id
     return (
         tuple(sorted(claims.values(), key=lambda item: item.claim_id)),
@@ -535,6 +594,21 @@ def build_review_graph(
         )
         existing_sources = store.sources()
         prior_queries = store.queries()
+        remaining_query_budget = max(0, config.max_queries - len(prior_queries))
+        if remaining_query_budget == 0:
+            sequence = _append_trajectory(
+                store,
+                state,
+                stage="retrieval",
+                action="The configured query budget is exhausted.",
+                stop_reason="query-budget-reached",
+            )
+            return {
+                "phase": "synthesis",
+                "round_number": int(state.get("round_number") or 0),
+                "trajectory_sequence": sequence,
+                "stop_reason": "query-budget-reached",
+            }
         plan = semantic_engine.plan_queries(
             scope=scope,
             config=config,
@@ -549,7 +623,6 @@ def build_review_graph(
             for item in plan.queries
             if _query_signature(item) not in signatures
         )
-        remaining_query_budget = max(0, config.max_queries - len(prior_queries))
         queries = queries[:remaining_query_budget]
         if not queries:
             sequence = _append_trajectory(
@@ -1142,6 +1215,9 @@ def build_review_graph(
             uncertainties=uncertainties,
             assessments=assessments,
             saturated=saturated,
+            required_nonconsensus_uncertainty_ids=(
+                _required_nonconsensus_uncertainty_ids(scope)
+            ),
         )
         store.write_readiness(readiness)
         round_number = int(state.get("round_number") or 0)
@@ -1208,6 +1284,9 @@ def build_review_graph(
             uncertainties=uncertainties,
             assessments=assessments,
             saturated=search_saturated(store.round_gains()),
+            required_nonconsensus_uncertainty_ids=(
+                _required_nonconsensus_uncertainty_ids(scope)
+            ),
         )
         store.write_readiness(readiness)
         try:
@@ -1572,6 +1651,9 @@ class ReviewController:
             uncertainties=uncertainties,
             assessments=assessments,
             saturated=search_saturated(self.store.round_gains()),
+            required_nonconsensus_uncertainty_ids=(
+                _required_nonconsensus_uncertainty_ids(self.scope)
+            ),
         )
         self.store.write_readiness(readiness)
         self.progress.update(

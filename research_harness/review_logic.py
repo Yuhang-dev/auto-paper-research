@@ -1045,6 +1045,7 @@ def review_readiness(
     uncertainties: Sequence[ResearchUncertainty],
     assessments: Sequence[NonConsensusAssessment],
     saturated: bool,
+    required_nonconsensus_uncertainty_ids: Sequence[str] = (),
 ) -> ReviewReadiness:
     cards_by_facet: dict[str, set[str]] = defaultdict(set)
     for card in cards:
@@ -1062,21 +1063,35 @@ def review_readiness(
         )
     )
     generic_nonconsensus_prefix = "what evidence is required to explain "
-    nonconsensus_questions = {
-        " ".join(item.question.casefold().split())
+    eligible_uncertainties = {
+        item.uncertainty_id: item
         for item in uncertainties
         if item.category == "nonconsensus"
         and not " ".join(item.question.casefold().split()).startswith(
             generic_nonconsensus_prefix
         )
     }
-    evidence_pool_assessments = {
-        " ".join(item.question.casefold().split())
-        for item in assessments
-        if item.basis == "evidence-pool"
+    required_assessment_ids = set(required_nonconsensus_uncertainty_ids)
+    if not required_assessment_ids:
+        required_assessment_ids = set(eligible_uncertainties)
+    uncertainty_id_by_question = {
+        " ".join(item.question.casefold().split()): item.uncertainty_id
+        for item in eligible_uncertainties.values()
     }
-    nonconsensus_complete = nonconsensus_questions.issubset(
-        evidence_pool_assessments
+    evidence_pool_assessment_ids = set()
+    for item in assessments:
+        if item.basis != "evidence-pool":
+            continue
+        if item.uncertainty_id:
+            evidence_pool_assessment_ids.add(item.uncertainty_id)
+            continue
+        legacy_id = uncertainty_id_by_question.get(
+            " ".join(item.question.casefold().split())
+        )
+        if legacy_id:
+            evidence_pool_assessment_ids.add(legacy_id)
+    nonconsensus_complete = required_assessment_ids.issubset(
+        evidence_pool_assessment_ids
     )
     evidenced_claims = sum(
         bool(item.supporting_card_ids or item.opposing_card_ids) for item in claims

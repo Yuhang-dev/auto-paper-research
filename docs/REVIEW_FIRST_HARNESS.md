@@ -35,6 +35,9 @@ Deep Read 论文后，按 arXiv ID 或 DOI 为这些少量论文补充 citation 
 和外部 ID。从第二轮开始，未填满的全局来源预算可以被仍有结果的检索 provider
 重新利用；最终总来源始终受 `max_sources` 约束。
 
+Standard 的 12 个 Query 按剩余轮次均匀保留预算，默认三轮各最多 4 个，避免前两轮
+耗尽 Query 额度而跳过最后一次 Gap 驱动补搜。
+
 来源软配额只服务于发现和 Skim 多样性，不再直接决定 Deep Read。Deep Read
 优先满足原始论文下限：Smoke 为 2，standard 为 6；剩余名额再按证据价值补充
 官方项目和一手 Web 资料。标题明确为 survey 的论文会降权，但仍可用于技术谱系。
@@ -128,7 +131,8 @@ python -B -m research_harness doctor
 `SEMANTIC_SCHOLAR_API_KEY`。Key 加载到当前进程，不进入 run config、artifact、
 SQLite 或 Git。Semantic Scholar 请求只发生在 Deep Read 选择之后，一次批量补全
 本轮入选论文的有限元数据；429 时短退避重试一次。仍失败只记录一条可选元数据错误，
-不会阻断 PDF 获取、证据抽取或整轮调研。S2 返回的 citation count 等元数据仅用于
+并在当前进程剩余轮次熔断 S2 元数据补全，不会阻断 PDF 获取、证据抽取或整轮调研。
+S2 返回的 citation count 等元数据仅用于
 导航和审计，不能替代带 locator 的 `EvidenceCard`。
 
 Fast 模型处理规划、screening 和 Skim；Reasoning 模型处理深读、EvidenceCard、
@@ -164,7 +168,11 @@ fingerprint；API key 从不进入 config、artifact 或 SQLite checkpoint。
 - 一条 Assessment 不合法时只降级或隔离该条，同批 Claim 和 uncertainty 继续合并；
 - 不可比或来源不足时降级为单篇观察或 `insufficient-evidence`；
 - 只有 Evidence Pool 建立后重新执行的 Assessment 才计入
-  `nonconsensus_review_complete`，Skim-only 结果只驱动补搜。
+  `nonconsensus_review_complete`，Skim-only 结果只驱动补搜。每个范围内候选假设使用
+  稳定 `uncertainty_id` 绑定 Assessment；完成检查可以得到
+  `supported-consensus`、`contested` 或 `insufficient-evidence`。
+- 宽泛的研究主问题只用于首轮定向；已有 EvidenceCard 后由具体 coverage/gap 接管，
+  不再作为永久 blocking uncertainty。
 
 最终 Markdown 不由模型自由写文件。模型先产生 `ReviewSynthesisDraft`，程序验证
 EvidenceCard 引用后，再用确定性 renderer 生成十节报告和证据索引。

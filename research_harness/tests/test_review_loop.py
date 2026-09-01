@@ -19,7 +19,12 @@ from research_harness.evidence_verification import (
     PaperVerificationDraft,
 )
 from research_harness.model_client import ReviewModelBundle
-from research_harness.review_control import ReviewController, _merge_reasoning
+from research_harness.review_control import (
+    ReviewController,
+    _initial_uncertainties,
+    _merge_reasoning,
+    _refresh_review_analysis,
+)
 from research_harness.review_errorbook import aggregate_review_error_book
 from research_harness.review_logic import (
     analyze_review_gaps,
@@ -35,6 +40,7 @@ from research_harness.review_logic import (
     select_for_skim_round,
     search_saturated,
     source_evidence_eligible,
+    stable_id,
     validate_nonconsensus_assessment,
     web_source_authority,
 )
@@ -280,9 +286,20 @@ class FakeReviewEngine:
             )
             for item in uncertainties
         )
+        target_uncertainty = next(
+            (item for item in uncertainties if item.category == "nonconsensus"),
+            None,
+        )
         assessment = NonConsensusAssessment(
             assessment_id="assessment:smoke",
-            question="Do independent sources establish a stable cross-setting result?",
+            uncertainty_id=(
+                target_uncertainty.uncertainty_id if target_uncertainty else None
+            ),
+            question=(
+                target_uncertainty.question
+                if target_uncertainty
+                else "Do independent sources establish a stable cross-setting result?"
+            ),
             result="insufficient-evidence",
             comparable=False,
             independent_source_ids=source_ids,
@@ -840,6 +857,25 @@ class ReviewLoopTests(unittest.TestCase):
         slept.assert_called_once_with(2.0)
         self.assertEqual("s2-one", enriched[source.source_id].metadata["semantic_scholar_paper_id"])
 
+    def test_semantic_scholar_opens_run_circuit_after_repeated_rate_limit(self):
+        source = _paper_source(1)
+        provider = SemanticScholarProvider("fixture-s2-key")
+        with mock.patch(
+            "research_harness.review_providers._semantic_scholar_paper_batch",
+            side_effect=RuntimeError(
+                "Semantic Scholar HTTP 429: Too Many Requests"
+            ),
+        ) as requested, mock.patch(
+            "research_harness.review_providers.time.sleep"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                asyncio.run(provider.enrich_many((source,)))
+            skipped = asyncio.run(provider.enrich_many((source,)))
+
+        self.assertEqual(2, requested.call_count)
+        self.assertTrue(provider.rate_limit_circuit_open)
+        self.assertEqual(source, skipped[source.source_id])
+
     def test_semantic_scholar_http_error_retains_safe_service_message(self):
         payload = b'{"message":"Too Many Requests","code":"429"}'
 
@@ -1122,6 +1158,46 @@ class ReviewLoopTests(unittest.TestCase):
             all(item.uncertainty_id in {"gap:1", "gap:2", "gap:3"} for item in plan.queries)
         )
 
+    def test_query_budget_is_distributed_across_standard_rounds(self):
+        config = self._standard_config()
+
+        def draft(round_number: int) -> QueryPlan:
+            return QueryPlan(
+                rationale=f"Round {round_number} query candidates.",
+                queries=tuple(
+                    RetrievalQuery(
+                        id=f"draft-{round_number}-{index}",
+                        round=round_number,
+                        provider="deepxiv",
+                        text=f"round {round_number} sparse evidence query {index}",
+                        purpose="Locate primary evidence for a review gap.",
+                    )
+                    for index in range(1, 7)
+                ),
+            )
+
+        engine = object.__new__(LangChainReviewSemanticEngine)
+        engine.fast_model = ScriptedStructuredModel(
+            [draft(1), draft(2), draft(3)]
+        )
+        engine.registry = SkillRegistry(self.settings.skills_root)
+        prior_queries = ()
+        round_sizes = []
+        for round_number in (1, 2, 3):
+            plan = engine.plan_queries(
+                scope=self.scope,
+                config=config,
+                round_number=round_number,
+                uncertainties=(),
+                prior_queries=prior_queries,
+                enabled_providers=("deepxiv",),
+            )
+            round_sizes.append(len(plan.queries))
+            prior_queries = (*prior_queries, *plan.queries)
+
+        self.assertEqual([4, 4, 4], round_sizes)
+        self.assertEqual(config.max_queries, len(prior_queries))
+
     def test_fuzzy_same_work_remains_a_candidate(self):
         left = _paper_source(
             1,
@@ -1386,6 +1462,7 @@ class ReviewLoopTests(unittest.TestCase):
         )
         skim_assessment = NonConsensusAssessment(
             assessment_id="assessment:skim",
+            uncertainty_id=uncertainty.uncertainty_id,
             question=uncertainty.question,
             result="insufficient-evidence",
             comparable=False,
@@ -1413,6 +1490,94 @@ class ReviewLoopTests(unittest.TestCase):
 
         self.assertFalse(skim_readiness.nonconsensus_review_complete)
         self.assertTrue(evidence_readiness.nonconsensus_review_complete)
+
+    def test_required_nonconsensus_assessments_bind_by_uncertainty_id(self):
+        uncertainty = ResearchUncertainty(
+            uncertainty_id="uncertainty:kernel-speedup",
+            question="Does sparse FLOP reduction guarantee wall-clock speedup?",
+            category="nonconsensus",
+            priority=0.85,
+        )
+        assessment = NonConsensusAssessment(
+            assessment_id="model-generated-id",
+            uncertainty_id=uncertainty.uncertainty_id,
+            question="Can fewer FLOPs always make inference faster?",
+            result="insufficient-evidence",
+            comparable=False,
+            independent_source_ids=(),
+            rationale="Comparable independent measurements are unavailable.",
+        )
+
+        _claims, _uncertainties, merged = _merge_reasoning(
+            update=ReasoningUpdate(
+                summary="Completed the hypothesis checklist.",
+                assessments=(assessment,),
+            ),
+            existing_claims=(),
+            existing_uncertainties=(uncertainty,),
+            existing_assessments=(),
+            cards=(),
+        )
+        readiness = review_readiness(
+            required_facets=(),
+            cards=(),
+            claims=(),
+            uncertainties=(uncertainty,),
+            assessments=(merged[0].model_copy(update={"basis": "evidence-pool"}),),
+            saturated=False,
+            required_nonconsensus_uncertainty_ids=(uncertainty.uncertainty_id,),
+        )
+
+        self.assertEqual(uncertainty.uncertainty_id, merged[0].uncertainty_id)
+        self.assertEqual(uncertainty.question, merged[0].question)
+        self.assertEqual(
+            stable_id("assessment", uncertainty.uncertainty_id),
+            merged[0].assessment_id,
+        )
+        self.assertTrue(readiness.nonconsensus_review_complete)
+
+    def test_primary_scope_question_stops_blocking_after_evidence_exists(self):
+        config = self._config(run_id="scope-normalize", thread_id="scope-normalize")
+        store = ReviewArtifactStore(self.settings, config)
+        store.initialize()
+        initial = _initial_uncertainties(self.scope)
+        primary = next(item for item in initial if item.category == "scope")
+        legacy_primary = primary.model_copy(
+            update={"category": "performance", "blocking": True}
+        )
+        source = _paper_source(1)
+        store.write_sources((source,))
+        store.write_cards(
+            (
+                EvidenceCard(
+                    card_id="card:scope",
+                    source_id=source.source_id,
+                    source_url=source.canonical_url,
+                    source_version="v1",
+                    source_sha256="a" * 64,
+                    statement="A located result now narrows the broad scope question.",
+                    attribution="author",
+                    evidence_type="author-discussion",
+                    status="located",
+                    locator=EvidenceLocator(kind="pdf-page", value="2"),
+                ),
+            )
+        )
+
+        refreshed = _refresh_review_analysis(
+            scope=self.scope,
+            store=store,
+            claims=(),
+            uncertainties=(legacy_primary,),
+            assessments=(),
+        )
+        normalized = next(
+            item for item in refreshed if item.uncertainty_id == primary.uncertainty_id
+        )
+
+        self.assertEqual("scope", normalized.category)
+        self.assertFalse(normalized.blocking)
+        self.assertEqual("resolved", normalized.status)
 
     def test_one_invalid_assessment_does_not_discard_reasoning_claims(self):
         claim = UnderstandingClaim(
@@ -1575,7 +1740,9 @@ class ReviewLoopTests(unittest.TestCase):
         status = _review_state_payload(state, store)
         self.assertIn("facet_coverage", status["research_map"])
         self.assertIn("top_unresolved_gaps", status["research_map"])
+        self.assertIn("nonconsensus_assessments", status["research_map"])
         self.assertIn("coverage_matrix", status["paths"])
+        self.assertIn("nonconsensus_assessments", status["paths"])
         self.assertIsNone(status["progress"])
         stages = {str(item["stage"]) for item in progress.events}
         self.assertTrue(

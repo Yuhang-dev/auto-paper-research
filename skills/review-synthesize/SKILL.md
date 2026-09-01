@@ -30,6 +30,11 @@ independent evidence, and interpretation visibly separate.
 - Reassess each supplied non-consensus hypothesis after EvidenceCards are
   available. Skim-only assessments remain navigation and cannot enter the
   final report.
+- Produce one assessment for every item in
+  `required_nonconsensus_assessments` and copy its `uncertainty_id` exactly.
+  The result may be `supported-consensus`, `contested`, or
+  `insufficient-evidence`; completing the checklist does not require finding a
+  disagreement.
 - Reference exact EvidenceCard IDs. The runtime derives independent source IDs
   from those cards and deterministically downgrades unsupported comparisons.
 - Keep unresolved blocking questions explicit even when the search budget is

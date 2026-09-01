@@ -167,7 +167,7 @@ Review readiness 是计算结果，不可通过 YAML 直接填写：
 | `evidenced_claims` | C | 至少关联一个支持或反对卡片的 UnderstandingClaim 数 |
 | `independent_sources` | C | Evidence Pool 中唯一 source ID 数 |
 | `unresolved_blocking_ids` | C | 仍为 open 且 blocking 的 uncertainty |
-| `nonconsensus_review_complete` | C | 每个范围内非共识问题都已有 Evidence Pool 阶段 Assessment；Skim-only assessment 不计入 |
+| `nonconsensus_review_complete` | C | 每个范围内候选假设的稳定 `uncertainty_id` 都已有 Evidence Pool 阶段 Assessment；Skim-only assessment 不计入 |
 | `saturated` | C | 连续两轮无新路线、卡片、独立来源、covered facet、blocking resolution、独立反证和确认关系 |
 | `ready` | C | facet/evidence/uncertainty/nonconsensus/saturation 的组合判断 |
 

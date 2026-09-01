@@ -1221,6 +1221,11 @@ def _review_state_payload(
         "research_gaps": (
             store.relative(store.gaps_path) if store.gaps_path.is_file() else None
         ),
+        "nonconsensus_assessments": (
+            store.relative(store.assessments_path)
+            if store.assessments_path.is_file()
+            else None
+        ),
     }
     report_exists = store.report_path.is_file()
     role_counts: Dict[str, int] = {}
@@ -1230,6 +1235,12 @@ def _review_state_payload(
     gaps = tuple(item for item in store.gaps() if item.status == "open")
     technology_map = store.technology_map()
     relation_candidates = technology_map.get("relation_candidates", [])
+    assessments = store.assessments()
+    assessment_results: Dict[str, int] = {}
+    for assessment in assessments:
+        assessment_results[assessment.result] = (
+            assessment_results.get(assessment.result, 0) + 1
+        )
     return {
         "schema_version": "review-status-0.1",
         "research_id": store.config.research_id,
@@ -1274,6 +1285,13 @@ def _review_state_payload(
                 item.model_dump(mode="json") for item in gaps[:5]
             ],
             "relation_candidates": len(relation_candidates),
+            "nonconsensus_assessments": {
+                "total": len(assessments),
+                "evidence_pool": sum(
+                    item.basis == "evidence-pool" for item in assessments
+                ),
+                "results": dict(sorted(assessment_results.items())),
+            },
             "next_recommended_pivot": gaps[0].question if gaps else None,
         },
         "run_local_errors": len(store.error_events()),

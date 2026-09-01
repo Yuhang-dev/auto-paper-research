@@ -593,6 +593,7 @@ class EvidenceExtraction(ReviewModel):
 
 class NonConsensusAssessment(ReviewModel):
     assessment_id: str
+    uncertainty_id: Optional[str] = None
     question: str
     result: AssessmentResult
     comparable: bool
