@@ -139,7 +139,7 @@ V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 
 | 参数 | 类别 | smoke | standard |
 |---|---|---:|---:|
 | `max_sources` | I | 8 | 50 |
-| `max_skims` | I | 4 | 20 |
+| `max_skims` | I | 4 | 20；跨轮累计，Standard 三轮渐进目标为 7 / 14 / 20 |
 | `max_deep_reads` | I | 2 | 10 |
 | `minimum_deep_read_papers` | I | 2 | 6 |
 | `minimum_core_study_deep_reads` | I | 0 | 6 |
@@ -167,7 +167,7 @@ Review readiness 是计算结果，不可通过 YAML 直接填写：
 | `evidenced_claims` | C | 至少关联一个支持或反对卡片的 UnderstandingClaim 数 |
 | `independent_sources` | C | Evidence Pool 中唯一 source ID 数 |
 | `unresolved_blocking_ids` | C | 仍为 open 且 blocking 的 uncertainty |
-| `nonconsensus_review_complete` | C | 已产生合法 assessment，或范围没有非共识问题 |
+| `nonconsensus_review_complete` | C | 每个范围内非共识问题都已有 Evidence Pool 阶段 Assessment；Skim-only assessment 不计入 |
 | `saturated` | C | 连续两轮无新路线、卡片、独立来源、covered facet、blocking resolution、独立反证和确认关系 |
 | `ready` | C | facet/evidence/uncertainty/nonconsensus/saturation 的组合判断 |
 

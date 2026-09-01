@@ -45,6 +45,10 @@ benchmark 2、reproduction 1、project 2，其余按综合得分补齐。10 个 
 survey 最多 2、非论文来源最多 2，并优先保证 6 个 primary/benchmark/reproduction
 论文。来源不足时按稳定排名补位，不中断运行。
 
+Skim 上限是整个 run 的累计预算，不是每轮重新选择 20 个。三轮 Standard 默认依次
+开放到 `7 → 14 → 20`，从而为后续 gap-driven 来源保留阅读名额。旧 run 中已经超过
+20 的 Skim 会继续保留用于审计，但恢复时不再增加。
+
 ## 3. Fast Research Loop
 
 独立 LangGraph 位于 `research_harness/review_control.py`：
@@ -99,7 +103,7 @@ EvidenceCard 等大对象保存在运行目录，不在每轮重复注入模型�
 
 - DeepXiv：论文发现和元数据；
 - Semantic Scholar Academic Graph：可选的入选论文元数据补全；只对 Deep Read
-  选中的论文调用单篇 Paper Details API，不执行 bulk discovery，不参与 Skim，
+  选中的论文调用一次 Paper Batch API，不执行 bulk discovery，不参与 Skim，
   也不作为正式证据；
 - arXiv：受控 PDF 下载和选择性文本提取；
 - Tavily：官方项目页、静态 Web 和反证发现；
@@ -122,10 +126,10 @@ python -B -m research_harness doctor
 
 `S2_API_KEY` 也可作为兼容别名，但项目文档统一使用
 `SEMANTIC_SCHOLAR_API_KEY`。Key 加载到当前进程，不进入 run config、artifact、
-SQLite 或 Git。Semantic Scholar 请求在 provider 内串行并遵守默认每秒一次
-的 key 配额；请求只发生在 Deep Read 选择之后，且一次只取一篇论文的有限元数据。
-补全失败只记录运行错误，不会阻断 PDF 获取、证据抽取或整轮调研。S2 返回的 citation
-count 等元数据仅用于导航和审计，不能替代带 locator 的 `EvidenceCard`。
+SQLite 或 Git。Semantic Scholar 请求只发生在 Deep Read 选择之后，一次批量补全
+本轮入选论文的有限元数据；429 时短退避重试一次。仍失败只记录一条可选元数据错误，
+不会阻断 PDF 获取、证据抽取或整轮调研。S2 返回的 citation count 等元数据仅用于
+导航和审计，不能替代带 locator 的 `EvidenceCard`。
 
 Fast 模型处理规划、screening 和 Skim；Reasoning 模型处理深读、EvidenceCard、
 反证判断和 synthesis。旧的 `HARNESS_MODEL / HARNESS_MODEL_BASE_URL /
@@ -156,7 +160,11 @@ fingerprint；API key 从不进入 config、artifact 或 SQLite checkpoint。
 - 报告不得引用未知 card ID；
 - comparison、consensus、contradiction 至少关联两个独立来源；
 - 同一论文里的 SCCA、S2、LongMixed 等配置不算跨论文证据；
-- 不可比或来源不足时降级为单篇观察或 `insufficient-evidence`。
+- `independent_source_ids` 由程序根据 EvidenceCard 反向计算，不采用模型自由填写值；
+- 一条 Assessment 不合法时只降级或隔离该条，同批 Claim 和 uncertainty 继续合并；
+- 不可比或来源不足时降级为单篇观察或 `insufficient-evidence`；
+- 只有 Evidence Pool 建立后重新执行的 Assessment 才计入
+  `nonconsensus_review_complete`，Skim-only 结果只驱动补搜。
 
 最终 Markdown 不由模型自由写文件。模型先产生 `ReviewSynthesisDraft`，程序验证
 EvidenceCard 引用后，再用确定性 renderer 生成十节报告和证据索引。

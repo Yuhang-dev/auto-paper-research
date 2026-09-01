@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from itertools import combinations
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence, Tuple, TypeVar
+from typing import Iterable, Literal, Mapping, Optional, Sequence, Tuple, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yaml
@@ -401,7 +402,10 @@ def select_for_skim(
     sources: Sequence[SourceRecord],
     screenings: Mapping[str, SourceScreening],
     config: ReviewRunConfig,
+    *,
+    limit: Optional[int] = None,
 ) -> Tuple[str, ...]:
+    selection_limit = min(config.max_skims, limit or config.max_skims)
     by_id = {item.source_id: item for item in sources}
     ranked = []
     for source_id, screening in screenings.items():
@@ -411,7 +415,7 @@ def select_for_skim(
         ranked.append((screening.ranking_score, source, source_id))
     ranked.sort(key=lambda item: (-item[0], source_identity(item[1]), item[2]))
     if config.source_role_targets:
-        type_limits = _type_limits(config.max_skims, config)
+        type_limits = _type_limits(selection_limit, config)
         selected: list[tuple[float, SourceRecord, str]] = []
         selected_ids: set[str] = set()
         type_counts: dict[SourceType, int] = defaultdict(int)
@@ -428,8 +432,14 @@ def select_for_skim(
             return True
 
         for role, target in config.source_role_targets.items():
+            progressive_target = max(
+                1,
+                math.ceil(target * selection_limit / config.max_skims),
+            )
             admitted = 0
             for item in ranked:
+                if len(selected) >= selection_limit:
+                    break
                 source = item[1]
                 screening = screenings[item[2]]
                 effective_role = (
@@ -437,20 +447,51 @@ def select_for_skim(
                 )
                 if effective_role == role and admit(item):
                     admitted += 1
-                    if admitted >= target:
+                    if admitted >= progressive_target:
                         break
         for item in ranked:
-            if len(selected) >= config.max_skims:
+            if len(selected) >= selection_limit:
                 break
             admit(item)
         for item in ranked:
-            if len(selected) >= config.max_skims:
+            if len(selected) >= selection_limit:
                 break
             if item[2] not in selected_ids:
                 selected.append(item)
                 selected_ids.add(item[2])
-        return tuple(item[2] for item in selected[: config.max_skims])
-    return _stratified_select(ranked, limit=config.max_skims, config=config)
+        return tuple(item[2] for item in selected[:selection_limit])
+    return _stratified_select(ranked, limit=selection_limit, config=config)
+
+
+def select_for_skim_round(
+    sources: Sequence[SourceRecord],
+    screenings: Mapping[str, SourceScreening],
+    existing_skim_ids: Sequence[str],
+    config: ReviewRunConfig,
+    *,
+    round_number: int,
+) -> Tuple[str, ...]:
+    """Allocate the cumulative Skim budget progressively across search rounds."""
+
+    target_total = min(
+        config.max_skims,
+        math.ceil(
+            config.max_skims * max(1, round_number) / config.max_search_rounds
+        ),
+    )
+    source_ids = {item.source_id for item in sources}
+    existing = tuple(sorted({item for item in existing_skim_ids if item in source_ids}))
+    remaining = max(0, target_total - len(existing))
+    if remaining == 0:
+        return existing
+    ranked = select_for_skim(
+        sources,
+        screenings,
+        config,
+        limit=target_total,
+    )
+    additions = tuple(item for item in ranked if item not in existing)[:remaining]
+    return (*existing, *additions)
 
 
 def select_for_deep_read(
@@ -571,6 +612,56 @@ def validate_nonconsensus_assessment(
                 "consensus and contested assessments require a comparable "
                 "cross-source experiment pair with aligned conditions"
             )
+
+
+def normalize_nonconsensus_assessment(
+    assessment: NonConsensusAssessment,
+    cards: Mapping[str, EvidenceCard],
+    *,
+    basis: Literal["skim", "evidence-pool"],
+) -> NonConsensusAssessment:
+    """Derive source identity from cards and downgrade unsupported comparisons."""
+
+    supporting = tuple(
+        dict.fromkeys(item for item in assessment.supporting_card_ids if item in cards)
+    )
+    opposing = tuple(
+        dict.fromkeys(item for item in assessment.opposing_card_ids if item in cards)
+    )
+    referenced = (*supporting, *opposing)
+    source_ids = tuple(sorted({cards[item].source_id for item in referenced}))
+    result = assessment.result
+    comparable = assessment.comparable
+    rationale = assessment.rationale
+    downgrade_reason = None
+    if result in {"supported-consensus", "contested"}:
+        referenced_cards = [cards[item] for item in referenced]
+        if len(source_ids) < 2:
+            downgrade_reason = "fewer than two independent evidence sources"
+        elif not comparable:
+            downgrade_reason = "the proposed comparison is not comparable"
+        elif not _has_comparable_cross_source_pair(referenced_cards):
+            downgrade_reason = "the referenced experiments have misaligned conditions"
+    if downgrade_reason:
+        result = "insufficient-evidence"
+        comparable = False
+        rationale = (
+            f"Deterministic evidence validation found {downgrade_reason}. "
+            f"{rationale}"
+        )
+    normalized = assessment.model_copy(
+        update={
+            "result": result,
+            "comparable": comparable,
+            "independent_source_ids": source_ids,
+            "supporting_card_ids": supporting,
+            "opposing_card_ids": opposing,
+            "rationale": rationale,
+            "basis": basis,
+        }
+    )
+    validate_nonconsensus_assessment(normalized, cards)
+    return normalized
 
 
 def _has_comparable_cross_source_pair(cards: Sequence[EvidenceCard]) -> bool:
@@ -970,12 +1061,23 @@ def review_readiness(
             if item.blocking and item.status == "open"
         )
     )
+    generic_nonconsensus_prefix = "what evidence is required to explain "
     nonconsensus_questions = {
-        item.uncertainty_id
+        " ".join(item.question.casefold().split())
         for item in uncertainties
         if item.category == "nonconsensus"
+        and not " ".join(item.question.casefold().split()).startswith(
+            generic_nonconsensus_prefix
+        )
     }
-    nonconsensus_complete = bool(assessments) or not nonconsensus_questions
+    evidence_pool_assessments = {
+        " ".join(item.question.casefold().split())
+        for item in assessments
+        if item.basis == "evidence-pool"
+    }
+    nonconsensus_complete = nonconsensus_questions.issubset(
+        evidence_pool_assessments
+    )
     evidenced_claims = sum(
         bool(item.supporting_card_ids or item.opposing_card_ids) for item in claims
     )
@@ -1046,10 +1148,12 @@ __all__ = [
     "formal_wiki_paper_identities",
     "merge_sources",
     "merge_gap_uncertainties",
+    "normalize_nonconsensus_assessment",
     "review_readiness",
     "search_saturated",
     "select_for_deep_read",
     "select_for_skim",
+    "select_for_skim_round",
     "source_identity",
     "stable_id",
     "validate_nonconsensus_assessment",

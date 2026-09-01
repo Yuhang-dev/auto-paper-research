@@ -19,7 +19,7 @@ from research_harness.evidence_verification import (
     PaperVerificationDraft,
 )
 from research_harness.model_client import ReviewModelBundle
-from research_harness.review_control import ReviewController
+from research_harness.review_control import ReviewController, _merge_reasoning
 from research_harness.review_errorbook import aggregate_review_error_book
 from research_harness.review_logic import (
     analyze_review_gaps,
@@ -27,9 +27,12 @@ from research_harness.review_logic import (
     build_source_relation_candidates,
     formal_wiki_paper_identities,
     merge_sources,
+    normalize_nonconsensus_assessment,
+    review_readiness,
     sanitize_provisional_skim,
     select_for_deep_read,
     select_for_skim,
+    select_for_skim_round,
     search_saturated,
     source_evidence_eligible,
     validate_nonconsensus_assessment,
@@ -65,6 +68,7 @@ from research_harness.review_promotion import ReviewPromoter
 from research_harness.review_providers import (
     ReviewProviderRegistry,
     SemanticScholarProvider,
+    _semantic_scholar_paper_batch,
     _semantic_scholar_paper_details,
 )
 from research_harness.review_storage import ReviewArtifactStore
@@ -773,6 +777,69 @@ class ReviewLoopTests(unittest.TestCase):
         )
         self.assertTrue(request_options["stream"])
 
+    def test_semantic_scholar_batch_uses_one_post_for_selected_papers(self):
+        payload = json.dumps(
+            [
+                {"paperId": "s2-one", "title": "One"},
+                {"paperId": "s2-two", "title": "Two"},
+            ]
+        ).encode("utf-8")
+
+        class Response:
+            status_code = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def iter_content(self, *, chunk_size):
+                del chunk_size
+                yield payload
+
+        with mock.patch(
+            "research_harness.review_providers.requests.post",
+            return_value=Response(),
+        ) as requested:
+            result = _semantic_scholar_paper_batch(
+                ("ARXIV:2401.00001", "ARXIV:2401.00002"),
+                "fixture-s2-key",
+            )
+
+        self.assertEqual(("s2-one", "s2-two"), tuple(item["paperId"] for item in result))
+        self.assertEqual(
+            "https://api.semanticscholar.org/graph/v1/paper/batch",
+            requested.call_args.args[0],
+        )
+        self.assertEqual(
+            {"ids": ["ARXIV:2401.00001", "ARXIV:2401.00002"]},
+            requested.call_args.kwargs["json"],
+        )
+
+    def test_semantic_scholar_batch_retries_one_rate_limit(self):
+        source = _paper_source(1)
+        payload = {
+            "paperId": "s2-one",
+            "title": source.title,
+            "externalIds": {"ArXiv": source.arxiv_id},
+        }
+        provider = SemanticScholarProvider("fixture-s2-key")
+        with mock.patch(
+            "research_harness.review_providers._semantic_scholar_paper_batch",
+            side_effect=[
+                RuntimeError("Semantic Scholar HTTP 429: Too Many Requests"),
+                (payload,),
+            ],
+        ) as requested, mock.patch(
+            "research_harness.review_providers.time.sleep"
+        ) as slept:
+            enriched = asyncio.run(provider.enrich_many((source,)))
+
+        self.assertEqual(2, requested.call_count)
+        slept.assert_called_once_with(2.0)
+        self.assertEqual("s2-one", enriched[source.source_id].metadata["semantic_scholar_paper_id"])
+
     def test_semantic_scholar_http_error_retains_safe_service_message(self):
         payload = b'{"message":"Too Many Requests","code":"429"}'
 
@@ -959,6 +1026,51 @@ class ReviewLoopTests(unittest.TestCase):
             sum(role in {"primary-study", "benchmark", "reproduction"} for role in deep_roles),
             6,
         )
+
+    def test_standard_skim_budget_is_global_across_rounds(self):
+        config = self._standard_config()
+        sources = tuple(_paper_source(index) for index in range(1, 31))
+        screenings = {
+            source.source_id: SourceScreening(
+                source_id=source.source_id,
+                source_role="primary-study",
+                label="core",
+                relevance_score=1.0 - index * 0.01,
+                evidence_potential=0.9,
+                engineering_value=0.8,
+                counterevidence_value=0.6,
+                reason="Progressive global Skim budget fixture.",
+                target_facets=FACETS,
+            )
+            for index, source in enumerate(sources)
+        }
+
+        first = select_for_skim_round(
+            sources,
+            screenings,
+            (),
+            config,
+            round_number=1,
+        )
+        second = select_for_skim_round(
+            sources,
+            screenings,
+            first,
+            config,
+            round_number=2,
+        )
+        third = select_for_skim_round(
+            sources,
+            screenings,
+            second,
+            config,
+            round_number=3,
+        )
+
+        self.assertEqual(7, len(first))
+        self.assertEqual(14, len(second))
+        self.assertEqual(20, len(third))
+        self.assertEqual(len(third), len(set(third)))
 
     def test_query_planner_targets_top_gaps_primary_papers_and_counterevidence(self):
         config = self._standard_config()
@@ -1211,6 +1323,139 @@ class ReviewLoopTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"invalid\.md"):
             formal_wiki_paper_identities(self.root / "wiki")
 
+    def test_assessment_source_ids_are_derived_without_losing_claims(self):
+        card = EvidenceCard(
+            card_id="card:one",
+            source_id="paper:one",
+            source_url="https://example.org/paper-one",
+            source_version="v1",
+            source_sha256="a" * 64,
+            statement="The paper reports a located engineering limitation.",
+            attribution="author",
+            evidence_type="author-discussion",
+            status="located",
+            locator=EvidenceLocator(kind="pdf-page", value="4"),
+        )
+        claim = UnderstandingClaim(
+            claim_id="claim:one",
+            statement="Sparse execution has a located engineering limitation.",
+            scope=("sparse-attention",),
+            confidence=0.7,
+            supporting_card_ids=(card.card_id,),
+            status="supported",
+        )
+        assessment = NonConsensusAssessment(
+            assessment_id="assessment-1",
+            question="Is the limitation independently established?",
+            result="insufficient-evidence",
+            comparable=False,
+            independent_source_ids=(),
+            supporting_card_ids=(card.card_id,),
+            rationale="Only one located source currently supports the observation.",
+        )
+
+        normalized = normalize_nonconsensus_assessment(
+            assessment,
+            {card.card_id: card},
+            basis="evidence-pool",
+        )
+        self.assertEqual((card.source_id,), normalized.independent_source_ids)
+        self.assertEqual("evidence-pool", normalized.basis)
+
+        claims, _uncertainties, assessments = _merge_reasoning(
+            update=ReasoningUpdate(
+                summary="Located evidence updates the understanding.",
+                claims=(claim,),
+                assessments=(assessment,),
+            ),
+            existing_claims=(),
+            existing_uncertainties=(),
+            existing_assessments=(),
+            cards=(card,),
+        )
+        self.assertEqual((claim.claim_id,), tuple(item.claim_id for item in claims))
+        self.assertEqual((card.source_id,), assessments[0].independent_source_ids)
+        self.assertEqual("evidence-pool", assessments[0].basis)
+
+    def test_nonconsensus_completion_requires_evidence_pool_assessment(self):
+        uncertainty = ResearchUncertainty(
+            uncertainty_id="uncertainty:nonconsensus",
+            question="Does sparse FLOP reduction guarantee wall-clock speedup?",
+            category="nonconsensus",
+            priority=0.85,
+        )
+        skim_assessment = NonConsensusAssessment(
+            assessment_id="assessment:skim",
+            question=uncertainty.question,
+            result="insufficient-evidence",
+            comparable=False,
+            independent_source_ids=(),
+            rationale="Skim-only hypothesis check.",
+        )
+        skim_readiness = review_readiness(
+            required_facets=(),
+            cards=(),
+            claims=(),
+            uncertainties=(uncertainty,),
+            assessments=(skim_assessment,),
+            saturated=False,
+        )
+        evidence_readiness = review_readiness(
+            required_facets=(),
+            cards=(),
+            claims=(),
+            uncertainties=(uncertainty,),
+            assessments=(
+                skim_assessment.model_copy(update={"basis": "evidence-pool"}),
+            ),
+            saturated=False,
+        )
+
+        self.assertFalse(skim_readiness.nonconsensus_review_complete)
+        self.assertTrue(evidence_readiness.nonconsensus_review_complete)
+
+    def test_one_invalid_assessment_does_not_discard_reasoning_claims(self):
+        claim = UnderstandingClaim(
+            claim_id="claim:survives",
+            statement="A valid claim survives an unrelated assessment error.",
+            scope=("assessment-isolation",),
+            confidence=0.5,
+            status="provisional",
+        )
+        invalid = NonConsensusAssessment(
+            assessment_id="assessment:invalid",
+            question="Invalid assessment?",
+            result="insufficient-evidence",
+            comparable=False,
+            independent_source_ids=(),
+            rationale="Fixture rejected by deterministic validation.",
+        )
+        valid = invalid.model_copy(
+            update={
+                "assessment_id": "assessment:valid",
+                "question": "Valid assessment?",
+                "basis": "evidence-pool",
+            }
+        )
+        with mock.patch(
+            "research_harness.review_control.normalize_nonconsensus_assessment",
+            side_effect=[ValueError("invalid fixture"), valid],
+        ):
+            claims, _uncertainties, assessments = _merge_reasoning(
+                update=ReasoningUpdate(
+                    summary="Partial assessment validation.",
+                    claims=(claim,),
+                    assessments=(invalid, valid),
+                ),
+                existing_claims=(),
+                existing_uncertainties=(),
+                existing_assessments=(),
+                cards=(),
+            )
+
+        self.assertEqual((claim.claim_id,), tuple(item.claim_id for item in claims))
+        self.assertEqual((valid.assessment_id,), tuple(item.assessment_id for item in assessments))
+
     def test_same_paper_configurations_cannot_be_cross_paper_consensus(self):
         digest = "a" * 64
         cards = {
@@ -1290,6 +1535,13 @@ class ReviewLoopTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "comparable cross-source"):
             validate_nonconsensus_assessment(contested, independent_but_incomparable)
+        normalized = normalize_nonconsensus_assessment(
+            contested,
+            independent_but_incomparable,
+            basis="evidence-pool",
+        )
+        self.assertEqual("insufficient-evidence", normalized.result)
+        self.assertFalse(normalized.comparable)
 
     def test_offline_review_generates_cited_report_without_wiki_writes(self):
         config = self._config()

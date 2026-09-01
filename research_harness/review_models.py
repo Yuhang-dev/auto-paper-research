@@ -600,6 +600,7 @@ class NonConsensusAssessment(ReviewModel):
     supporting_card_ids: Tuple[str, ...] = ()
     opposing_card_ids: Tuple[str, ...] = ()
     rationale: str
+    basis: Literal["skim", "evidence-pool"] = "skim"
 
     @model_validator(mode="after")
     def _validate_independence(self) -> "NonConsensusAssessment":

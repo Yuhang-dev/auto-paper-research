@@ -24,10 +24,11 @@ from .review_logic import (
     formal_wiki_paper_identities,
     merge_gap_uncertainties,
     merge_sources,
+    normalize_nonconsensus_assessment,
     review_readiness,
     search_saturated,
     select_for_deep_read,
-    select_for_skim,
+    select_for_skim_round,
     stable_id,
 )
 from .review_errorbook import aggregate_review_error_book
@@ -204,6 +205,7 @@ def _initial_uncertainties(scope: ReviewScope) -> tuple[ResearchUncertainty, ...
                 category=category_by_facet.get(facet, "performance"),
                 priority=0.72,
                 blocking=False,
+                origin="deterministic",
             )
         )
     for hypothesis in scope.candidate_hypotheses:
@@ -292,7 +294,8 @@ def _merge_reasoning(
     tuple[ResearchUncertainty, ...],
     tuple[NonConsensusAssessment, ...],
 ]:
-    known_cards = {item.card_id for item in cards}
+    cards_by_id = {item.card_id: item for item in cards}
+    known_cards = set(cards_by_id)
     claims = {item.claim_id: item for item in existing_claims}
     claim_texts = {_normalized_text(item.statement): item.claim_id for item in existing_claims}
     for raw in update.claims:
@@ -355,6 +358,14 @@ def _merge_reasoning(
         for item in existing_assessments
     }
     for raw in update.assessments:
+        try:
+            raw = normalize_nonconsensus_assessment(
+                raw,
+                cards_by_id,
+                basis="evidence-pool" if cards else "skim",
+            )
+        except ValueError:
+            continue
         assessment_id = assessment_questions.get(
             _normalized_text(raw.question), raw.assessment_id
         )
@@ -686,7 +697,13 @@ def build_review_graph(
                         completed=processed,
                         total=len(pending),
                     )
-        selected = select_for_skim(sources, existing, config)
+        selected = select_for_skim_round(
+            sources,
+            existing,
+            tuple(item.source_id for item in store.skims()),
+            config,
+            round_number=int(state.get("round_number") or 1),
+        )
         sequence = _append_trajectory(
             store,
             state,
@@ -850,38 +867,34 @@ def build_review_graph(
     ]:
         semaphore = asyncio.Semaphore(config.network_concurrency)
 
+        enrichment_errors = []
+        try:
+            enriched_sources = await providers.enrich_sources(selected_sources)
+        except Exception as exc:
+            enriched_sources = {item.source_id: item for item in selected_sources}
+            if selected_sources:
+                enrichment_errors.append((selected_sources[0], exc))
+
         async def one(source: SourceRecord):
-            enriched = source
-            enrichment_error = None
-            try:
-                async with semaphore:
-                    enriched = await providers.enrich_source(source)
-            except Exception as exc:
-                # S2 enrichment is optional metadata; PDF acquisition remains the
-                # authoritative evidence path.
-                enrichment_error = exc
+            enriched = enriched_sources.get(source.source_id, source)
             material = store.material(source.source_id)
             if material is not None:
-                return source, enriched, material, None, enrichment_error
+                return source, enriched, material, None
             try:
                 async with semaphore:
                     material = await providers.acquire_material(enriched)
-                return source, enriched, material, None, enrichment_error
+                return source, enriched, material, None
             except Exception as exc:
-                return source, enriched, None, exc, enrichment_error
+                return source, enriched, None, exc
 
         materials = {}
-        enriched_sources = {}
         acquisition_errors = []
-        enrichment_errors = []
         tasks = [asyncio.create_task(one(item)) for item in selected_sources]
         processed = 0
         for task in asyncio.as_completed(tasks):
-            source, enriched, material, acquisition_error, enrichment_error = await task
+            source, enriched, material, acquisition_error = await task
             processed += 1
             enriched_sources[source.source_id] = enriched
-            if enrichment_error is not None:
-                enrichment_errors.append((source, enrichment_error))
             if acquisition_error is not None:
                 acquisition_errors.append((source, acquisition_error))
             elif material is not None:

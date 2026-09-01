@@ -50,6 +50,11 @@ ResearchGate、Academia.edu 等镜像用于导航，正式证据来自原始论�
 关系候选，只有精确 DOI/arXiv/repository/URL 身份会自动合并。
 使用说明见 `docs/REVIEW_FIRST_HARNESS.md`。
 
+Standard 的 20 个 Skim 是跨轮累计预算，按三轮渐进分配为 `7 → 14 → 20`。
+Semantic Scholar 对每轮入选 Deep Read 论文执行一次批量元数据补全；它失败时不影响
+PDF 证据路径。Assessment 的独立来源由 EvidenceCard 确定性计算，单条不合法比较只
+降级或隔离，不会丢弃同批 UnderstandingClaim。
+
 长时间运行的 Review 命令会在 stderr 使用单行心跳显示当前阶段、完成数、当前来源、
 耗时和循环点号。阶段切换时只保留一条完成记录，不会持续追加点号。最终 JSON 仍从
 stdout 输出。相同状态同时写入

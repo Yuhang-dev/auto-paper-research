@@ -27,6 +27,11 @@ independent evidence, and interpretation visibly separate.
   conditions before interpreting differences.
 - If evidence is sparse or incomparable, return `insufficient-evidence` or a
   single-source observation.
+- Reassess each supplied non-consensus hypothesis after EvidenceCards are
+  available. Skim-only assessments remain navigation and cannot enter the
+  final report.
+- Reference exact EvidenceCard IDs. The runtime derives independent source IDs
+  from those cards and deterministically downgrades unsupported comparisons.
 - Keep unresolved blocking questions explicit even when the search budget is
   exhausted.
 

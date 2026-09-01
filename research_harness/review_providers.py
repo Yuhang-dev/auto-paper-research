@@ -295,6 +295,49 @@ def _semantic_scholar_paper_details(
     return payload
 
 
+def _semantic_scholar_paper_batch(
+    identifiers: Sequence[str],
+    api_key: str,
+) -> tuple[Optional[Mapping[str, Any]], ...]:
+    """Fetch bounded paper metadata for a selected deep-read batch."""
+
+    if not identifiers:
+        return ()
+    fields = (
+        "paperId,corpusId,title,abstract,year,authors,url,venue,externalIds,"
+        "openAccessPdf,citationCount,influentialCitationCount,publicationDate"
+    )
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "auto-paper-research-review-harness/0.1",
+        "x-api-key": api_key,
+    }
+    with requests.post(
+        "https://api.semanticscholar.org/graph/v1/paper/batch",
+        params={"fields": fields},
+        headers=headers,
+        json={"ids": list(identifiers)},
+        timeout=45,
+        stream=True,
+    ) as response:
+        data = bytearray()
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            data.extend(chunk)
+            if len(data) > MAX_WEB_BYTES:
+                raise ValueError(
+                    "Semantic Scholar batch response exceeded the configured byte limit"
+                )
+        if response.status_code >= 400:
+            detail = bytes(data).decode("utf-8", errors="replace")[:800]
+            raise RuntimeError(
+                f"Semantic Scholar HTTP {response.status_code}: {detail}"
+            )
+    payload = json.loads(bytes(data).decode("utf-8", errors="replace"))
+    if not isinstance(payload, list) or len(payload) != len(identifiers):
+        raise ValueError("Semantic Scholar returned a misaligned paper batch")
+    return tuple(item if isinstance(item, Mapping) else None for item in payload)
+
+
 class SemanticScholarProvider:
     """Best-effort metadata enrichment for papers selected for deep reading."""
 
@@ -318,20 +361,35 @@ class SemanticScholarProvider:
                 self.api_key,
             )
 
-    async def enrich(self, source: SourceRecord) -> SourceRecord:
-        if source.source_type != "paper":
-            return source
-        if source.metadata.get("semantic_scholar_enriched_at"):
-            return source
-        identifier = _semantic_scholar_identifier(source)
-        if not identifier:
-            return source
-        # Details are fetched only after deterministic deep-read selection,
-        # never during broad discovery or skim.
-        payload = await asyncio.to_thread(self._request, identifier)
+    def _batch_request(
+        self,
+        identifiers: Sequence[str],
+    ) -> tuple[Optional[Mapping[str, Any]], ...]:
+        with self._request_lock:
+            wait_seconds = 1.0 - (time.monotonic() - self._last_request_started)
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+            for attempt in range(2):
+                self._last_request_started = time.monotonic()
+                try:
+                    return _semantic_scholar_paper_batch(
+                        identifiers,
+                        self.api_key,
+                    )
+                except RuntimeError as exc:
+                    if "Semantic Scholar HTTP 429" not in str(exc) or attempt == 1:
+                        raise
+                    time.sleep(2.0)
+            raise RuntimeError("Semantic Scholar batch retry exhausted")
+
+    def _apply_payload(
+        self,
+        source: SourceRecord,
+        payload: Mapping[str, Any],
+    ) -> SourceRecord:
         paper_id = str(payload.get("paperId") or "").strip()
         if not paper_id:
-            raise ValueError("Semantic Scholar paper detail omitted paperId")
+            return source
         external_ids = payload.get("externalIds") or {}
         if not isinstance(external_ids, Mapping):
             external_ids = {}
@@ -357,16 +415,58 @@ class SemanticScholarProvider:
             update={
                 "authors": source.authors or _authors(payload.get("authors")),
                 "year": source.year or _year(payload.get("year") or publication_date),
-                "venue": source.venue or (str(payload.get("venue") or "").strip() or None),
-                "abstract": source.abstract or (str(payload.get("abstract") or "").strip() or None),
-                "doi": source.doi or (canonical_doi(str(raw_doi)) if raw_doi else None),
-                "arxiv_id": source.arxiv_id or (
-                    canonical_arxiv_id(str(raw_arxiv)) if raw_arxiv else None
-                ),
+                "venue": source.venue
+                or (str(payload.get("venue") or "").strip() or None),
+                "abstract": source.abstract
+                or (str(payload.get("abstract") or "").strip() or None),
+                "doi": source.doi
+                or (canonical_doi(str(raw_doi)) if raw_doi else None),
+                "arxiv_id": source.arxiv_id
+                or (canonical_arxiv_id(str(raw_arxiv)) if raw_arxiv else None),
                 "pdf_url": source.pdf_url or open_pdf_url,
                 "metadata": metadata,
             }
         )
+
+    async def enrich(self, source: SourceRecord) -> SourceRecord:
+        if source.source_type != "paper":
+            return source
+        if source.metadata.get("semantic_scholar_enriched_at"):
+            return source
+        identifier = _semantic_scholar_identifier(source)
+        if not identifier:
+            return source
+        # Details are fetched only after deterministic deep-read selection,
+        # never during broad discovery or skim.
+        payload = await asyncio.to_thread(self._request, identifier)
+        if not payload.get("paperId"):
+            raise ValueError("Semantic Scholar paper detail omitted paperId")
+        return self._apply_payload(source, payload)
+
+    async def enrich_many(
+        self,
+        sources: Sequence[SourceRecord],
+    ) -> dict[str, SourceRecord]:
+        result = {item.source_id: item for item in sources}
+        pending = []
+        for source in sources:
+            if source.source_type != "paper":
+                continue
+            if source.metadata.get("semantic_scholar_enriched_at"):
+                continue
+            identifier = _semantic_scholar_identifier(source)
+            if identifier:
+                pending.append((source, identifier))
+        if not pending:
+            return result
+        payloads = await asyncio.to_thread(
+            self._batch_request,
+            tuple(item[1] for item in pending),
+        )
+        for (source, _identifier), payload in zip(pending, payloads):
+            if payload is not None:
+                result[source.source_id] = self._apply_payload(source, payload)
+        return result
 
 
 class TavilyProvider:
@@ -875,6 +975,16 @@ class ReviewProviderRegistry:
         if self.semantic_scholar is None or source.source_type != "paper":
             return source
         return await self.semantic_scholar.enrich(source)
+
+    async def enrich_sources(
+        self,
+        sources: Sequence[SourceRecord],
+    ) -> dict[str, SourceRecord]:
+        """Batch optional metadata enrichment for the selected deep-read cohort."""
+
+        if self.semantic_scholar is None:
+            return {item.source_id: item for item in sources}
+        return await self.semantic_scholar.enrich_many(sources)
 
     async def acquire_material(self, source: SourceRecord) -> SourceMaterial:
         acquired_at = _utc_now()

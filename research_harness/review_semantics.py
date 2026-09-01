@@ -21,7 +21,6 @@ from .review_logic import (
     source_identity,
     source_is_survey,
     stable_id,
-    validate_nonconsensus_assessment,
 )
 from .review_models import (
     EvidenceCard,
@@ -737,9 +736,6 @@ class LangChainReviewSemanticEngine:
             },
             repair_once=True,
         )
-        known_cards = {item.card_id: item for item in cards}
-        for assessment in result.assessments:
-            validate_nonconsensus_assessment(assessment, known_cards)
         return result
 
     def extract_evidence(
@@ -948,7 +944,9 @@ class LangChainReviewSemanticEngine:
                 ],
                 "evidence_cards": _payload(cards),
                 "understanding_claims": _payload(claims),
-                "nonconsensus_assessments": _payload(assessments),
+                "nonconsensus_assessments": _payload(
+                    [item for item in assessments if item.basis == "evidence-pool"]
+                ),
                 "open_uncertainties": _payload(
                     [item for item in uncertainties if item.status != "resolved"]
                 ),
@@ -1128,8 +1126,11 @@ def render_review_markdown(
     else:
         lines.append("- 尚无经过定位的项目实现证据。")
     lines.extend(["", "## 7. 非共识结论与边界", ""])
-    if assessments:
-        for item in assessments:
+    report_assessments = tuple(
+        item for item in assessments if item.basis == "evidence-pool"
+    )
+    if report_assessments:
+        for item in report_assessments:
             cards_for_item = (*item.supporting_card_ids, *item.opposing_card_ids)
             result_label = {
                 "supported-consensus": "支持共识",
@@ -1141,7 +1142,7 @@ def render_review_markdown(
                 f"{_citation_suffix(cards_for_item, card_numbers)}"
             )
     else:
-        lines.append("- 尚未形成满足独立来源条件的非共识判断。")
+        lines.append("- Evidence Pool 尚未完成非共识判断；Skim 阶段结果仅作为补搜导航。")
     lines.extend(["", "## 8. 未解决问题", ""])
     open_questions = list(draft.open_questions)
     normalized_scope_question = " ".join(scope.question.split()).casefold()
