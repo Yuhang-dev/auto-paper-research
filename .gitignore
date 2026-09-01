@@ -14,6 +14,8 @@ credentials*.json
 .env
 .env.*
 !.env.example
+# Per-machine runtime configuration, including API keys.
+.env.local
 
 # Local release/test workspaces and build outputs
 dist/

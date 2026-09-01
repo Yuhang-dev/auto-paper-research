@@ -13,24 +13,23 @@ ChatOpenAI(
 Search planning、candidate screening、paper ingest、evidence verification、claim
 analysis 和通用 agent loop 使用同一个连接 contract。
 
-## PowerShell 配置
+## 本机配置
 
-先从本地服务确认实际 model ID。随后只在当前 PowerShell 7 会话设置：
-
-```powershell
-$env:HARNESS_MODEL = "openai:<served-model-id>"
-$env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
-$env:OPENAI_API_KEY = Read-Host -Prompt "Local model API key" -MaskInput
-```
-
-如果本地服务不校验认证，OpenAI client 仍要求非空 key；可以在当前会话使用一个
-非秘密 sentinel，例如：
+先从服务端确认实际 model ID，然后复制模板：
 
 ```powershell
-$env:OPENAI_API_KEY = "local-not-secret"
+Copy-Item .env.example .env.local
+notepad .env.local
 ```
 
-不要把真实 key 放入 `.env`、命令参数、YAML、Wiki、SQLite memory 或日志。
+在 `.env.local` 中填写服务端接受的模型 ID、Base URL 和 API key。如果本地服务不校验
+认证，OpenAI client 仍要求非空 key，可以填写一个非秘密 sentinel：
+
+```text
+OPENAI_API_KEY=local-not-secret
+```
+
+`.env.local` 由 Git 忽略。运行产物、YAML、Wiki、SQLite 和日志不保存 key。
 
 也可以把非敏感模型配置作为全局 CLI 参数放在子命令之前：
 

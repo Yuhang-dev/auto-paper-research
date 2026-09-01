@@ -18,6 +18,7 @@ from research_harness.config import (
     resolve_database_path,
 )
 from research_harness.cli import main as cli_main
+from research_harness.env_file import load_local_env
 from research_harness.graph import ResearchHarness
 from research_harness.memory import list_notes, recall_notes, remember_note
 from research_harness.model_client import create_chat_model
@@ -85,6 +86,24 @@ class HarnessTestCase(unittest.TestCase):
 
 
 class ConfigurationAndPersistenceTests(HarnessTestCase):
+    def test_local_env_file_loads_defaults_and_preserves_shell_values(self) -> None:
+        env_file = Path(self.temporary.name) / ".env.local"
+        env_file.write_text(
+            "# local runtime\n"
+            "HARNESS_FAST_MODEL=openai:file-model\n"
+            "HARNESS_FAST_API_KEY='file-key'\n",
+            encoding="utf-8",
+        )
+        with mock.patch.dict(
+            os.environ,
+            {"HARNESS_FAST_MODEL": "openai:shell-model"},
+            clear=True,
+        ):
+            loaded = load_local_env(env_file)
+            self.assertEqual("openai:shell-model", os.environ["HARNESS_FAST_MODEL"])
+            self.assertEqual("file-key", os.environ["HARNESS_FAST_API_KEY"])
+        self.assertEqual(("HARNESS_FAST_API_KEY",), loaded)
+
     def test_default_database_is_inside_project(self) -> None:
         settings = HarnessSettings.from_env()
         self.assertTrue(str(settings.database_path).startswith(str(REPOSITORY_ROOT)))

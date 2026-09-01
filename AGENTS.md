@@ -46,7 +46,7 @@
 - OpenAI-compatible 模型写作 `openai:<served-model-id>`，并显式配置 base URL。
 - 不按供应商域名硬编码模型白名单；模型是否存在及能力是否满足由服务端和能力探测决定。
 - SQLite 可以放在任意用户选择的可写盘符；仍使用持久化文件，不使用 `:memory:` checkpoint。
-- 密钥只从当前进程环境读取，不写入代码、Markdown、YAML、SQLite、artifact、日志或 Git。
+- 密钥由当前进程环境或 Git 忽略的 `.env.local` 注入，不写入代码、Markdown、YAML、SQLite、artifact、日志或 Git。
 - Windows 环境通常使用 Conda 环境 `paper-harness`；激活后直接运行 `python`，不要依赖未定义的 `$harnessPython`。
 
 ## Git 与交付

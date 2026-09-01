@@ -112,23 +112,17 @@ query、provider、rank 和发现时间。标题/作者相似只形成 `possible
 模型分工：
 
 ```powershell
-$env:HARNESS_FAST_MODEL = "openai:<fast-model-id>"
-$env:HARNESS_FAST_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
-$env:HARNESS_FAST_API_KEY = Read-Host -Prompt "Fast model key" -MaskInput
-
-$env:HARNESS_REASONING_MODEL = "openai:<reasoning-model-id>"
-$env:HARNESS_REASONING_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
-$env:HARNESS_REASONING_API_KEY = Read-Host -Prompt "Reasoning model key" -MaskInput
-
-$env:DEEPXIV_TOKEN = Read-Host -Prompt "DeepXiv token" -MaskInput
-$env:SEMANTIC_SCHOLAR_API_KEY = Read-Host -Prompt "Semantic Scholar key (optional)" -MaskInput
-$env:TAVILY_API_KEY = Read-Host -Prompt "Tavily key" -MaskInput
-$env:GITHUB_TOKEN = Read-Host -Prompt "GitHub token (optional)" -MaskInput
+Copy-Item .env.example .env.local
+notepad .env.local
+python -B -m research_harness doctor
 ```
 
+`.env.local` 保存两级模型和 Provider 凭证，程序启动时自动加载。当前 shell 中同名
+变量覆盖文件值；该文件由 Git 忽略。
+
 `S2_API_KEY` 也可作为兼容别名，但项目文档统一使用
-`SEMANTIC_SCHOLAR_API_KEY`。Key 仅从当前进程环境读取，不写入 run config、
-artifact、SQLite 或 Git。Semantic Scholar 请求在 provider 内串行并遵守默认每秒一次
+`SEMANTIC_SCHOLAR_API_KEY`。Key 加载到当前进程，不进入 run config、artifact、
+SQLite 或 Git。Semantic Scholar 请求在 provider 内串行并遵守默认每秒一次
 的 key 配额；请求只发生在 Deep Read 选择之后，且一次只取一篇论文的有限元数据。
 补全失败只记录运行错误，不会阻断 PDF 获取、证据抽取或整轮调研。S2 返回的 citation
 count 等元数据仅用于导航和审计，不能替代带 locator 的 `EvidenceCard`。

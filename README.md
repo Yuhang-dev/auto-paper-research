@@ -231,28 +231,28 @@ Requests 2.x 和 pypdf 6.16.2。
 
 ### Configure
 
-非敏感配置参考 `.env.example`。运行配置从当前 PowerShell 会话读取：
+首次运行时复制配置模板：
 
 ```powershell
-$env:HARNESS_MODEL = "openai:<本地服务暴露的模型 ID>"
-$env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
-$env:OPENAI_API_KEY = Read-Host -Prompt "Local model API key" -MaskInput
+Copy-Item .env.example .env.local
+notepad .env.local
 ```
 
-Harness 显式构造 `ChatOpenAI(model, base_url, api_key)`。`HARNESS_MODEL` 使用
-`openai:` 前缀，冒号后填写服务端接受的精确模型 ID。`--allow-network` 授权本地或
-远程 socket I/O。模型与 DeepXiv Key 保留在当前进程环境中。
+`.env.local` 集中保存模型 ID、Base URL、DeepSeek、DeepXiv、Semantic Scholar、
+Tavily 和可选 GitHub 凭证。程序启动时自动加载该文件；当前 PowerShell 会话中同名
+变量具有更高优先级。`.env.local` 已加入 `.gitignore`。
 
-若使用 DeepSeek 官方 endpoint：
+模板默认采用 DeepSeek 官方配置：
 
-```powershell
-$env:HARNESS_MODEL = "openai:<DeepSeek 服务端接受的模型 ID>"
-$env:HARNESS_MODEL_BASE_URL = "https://api.deepseek.com"
-$env:OPENAI_API_KEY = Read-Host -Prompt "DeepSeek API Key" -MaskInput
+```text
+Fast:      openai:deepseek-v4-flash
+Reasoning: openai:deepseek-v4-pro
+Base URL:  https://api.deepseek.com
 ```
 
-目标服务端和运行前能力探测共同确认 DeepSeek 模型名、JSON mode 与 tool calling
-支持。完整 endpoint 优先级和能力要求见
+使用本地 OpenAI-compatible 服务时，在 `.env.local` 中替换模型 ID 和两组 Base URL。
+Harness 显式构造 `ChatOpenAI(model, base_url, api_key)`；模型 ID 使用
+`openai:<served-model-id>`。`--allow-network` 授权 socket I/O。完整 endpoint 说明见
 `docs/OPENAI_COMPATIBLE_MODEL.md`。
 
 DeepXiv SDK 在获准的正式检索中延迟导入；其 tiktoken 编码缓存默认
@@ -499,11 +499,11 @@ conda run -n base python -B -m tools.wiki validate --strict
 conda run -n base python -m pip show deepxiv-sdk
 ```
 
-凭据通过当前 shell 的 `DEEPXIV_TOKEN` 传递，仓库、YAML、命令参数和日志保存非秘密
-配置。PowerShell 7 可用遮罩输入：
+凭据通过 `.env.local` 的 `DEEPXIV_TOKEN` 加载，仓库、YAML、命令参数和日志保存
+非秘密配置：
 
 ```powershell
-$env:DEEPXIV_TOKEN = Read-Host -Prompt "DeepXiv Token" -MaskInput
+notepad .env.local
 ```
 
 随后在同一个 shell 执行：

@@ -2,6 +2,9 @@
 
 import os
 
+from .env_file import load_local_env
+
+load_local_env()
 os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
 
 from .config import HarnessSettings

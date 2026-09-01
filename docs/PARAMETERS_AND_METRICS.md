@@ -54,14 +54,14 @@ DoneCriteria 按以下优先级解析：
   > research/<research-id>/done-criteria.yaml
 ```
 
-程序不会自动加载 `.env`。`.env.example` 只是示例；Key 应只存在于当前 shell
-环境变量中。
+程序启动时自动加载仓库根目录的 `.env.local`。当前 shell 中的同名环境变量覆盖
+文件值；`.env.local` 由 Git 忽略。
 
 ### 2.2 主要配置真源
 
 | 配置范围 | 真源 |
 |---|---|
-| Harness 进程配置 | `research_harness/config.py`、环境变量、全局 CLI |
+| Harness 进程配置 | `.env.local`、环境变量、`research_harness/config.py`、全局 CLI |
 | Outer Loop 完成门槛 | `research/<research-id>/done-criteria.yaml` |
 | 单次搜索计划 | `research/<research-id>/search-runs/*.yaml` |
 | Wiki 数据协议 | `wiki/_meta/schema.yaml` |

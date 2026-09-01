@@ -804,8 +804,8 @@ search-run 重新计算研究事实，避免 controller state 成为第二份知
 
 ## 11. 安全和可靠性边界
 
-- `.env`、SQLite、WAL/SHM、缓存和生成索引均被 `.gitignore` 排除；
-- `DEEPXIV_TOKEN` 和模型 API Key 只从环境变量读取；
+- `.env.local`、SQLite、WAL/SHM、缓存和生成索引均被 `.gitignore` 排除；
+- `.env.local` 或当前 shell 向进程注入 `DEEPXIV_TOKEN` 和模型 API Key；
 - 网络默认关闭，必须显式传递 `--allow-network`；
 - DeepXiv 命令使用参数数组，不拼接 shell 命令；
 - query ID、thread ID、research ID 和文件路径都有格式/目录约束；

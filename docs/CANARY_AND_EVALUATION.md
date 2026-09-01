@@ -49,14 +49,15 @@ search action
 
 ## 推荐的递进测试
 
-先在当前 PowerShell 会话设置凭证，不要把 Key 写入命令、仓库或 `.env`：
+首次运行时创建本机配置：
 
 ```powershell
-$env:DEEPXIV_TOKEN = Read-Host -Prompt "DeepXiv Token" -MaskInput
-$env:OPENAI_API_KEY = Read-Host -Prompt "Local model API key" -MaskInput
-$env:HARNESS_MODEL_BASE_URL = "http://127.0.0.1:8000/v1"
-$env:HARNESS_MODEL = "openai:<served-model-id>"
+Copy-Item .env.example .env.local
+notepad .env.local
+python -B -m research_harness doctor
 ```
+
+`.env.local` 由 Git 忽略；当前 PowerShell 会话中的同名变量覆盖文件值。
 
 本地 endpoint 也必须传 `--allow-network`。服务能力要求和 DeepSeek 兼容配置见
 `docs/OPENAI_COMPATIBLE_MODEL.md`。
