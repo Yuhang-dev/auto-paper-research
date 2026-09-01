@@ -127,8 +127,8 @@ Key 不得写入 `.env`、Search Run YAML、Wiki、SQLite memory、命令参数�
 | `HARNESS_REASONING_MODEL` | A | 无 | Deep Read、EvidenceCard、reasoning、synthesis 模型 |
 | `HARNESS_REASONING_MODEL_BASE_URL` | A | 无 | Reasoning endpoint |
 | `HARNESS_REASONING_API_KEY` | A | 无 | Reasoning endpoint 凭证 |
-| `--allow-single-model-fallback` | A | `false` | 明确允许 Fast 模型兼任 Reasoning；standard 缺少 Reasoning 配置且未传此项会失败 |
-| `--profile` | A | `standard` | `standard` 或 `smoke` |
+| `--allow-single-model-fallback` | A | `false` | 明确允许 Fast 模型兼任 Reasoning；standard/literature50 缺少 Reasoning 配置且未传此项会失败 |
+| `--profile` | A | `standard` | `smoke`、`standard` 或 `literature50` |
 | `--stop-after` | A | `synthesis` | 在指定 Review stage 后有界停止 |
 | `--thread` | R | 必填 | SQLite checkpoint 身份 |
 | `--run-id` | R | 自动生成 | artifact 身份；必须为安全 ASCII 文件名 |
@@ -136,23 +136,26 @@ Key 不得写入 `.env`、Search Run YAML、Wiki、SQLite memory、命令参数�
 
 V1 profile 预算固定在 `ReviewRunConfig.for_profile()`，暂未暴露逐项 CLI 覆盖：
 
-| 参数 | 类别 | smoke | standard |
-|---|---|---:|---:|
-| `max_sources` | I | 8 | 50 |
-| `max_skims` | I | 4 | 20；跨轮累计，Standard 三轮渐进目标为 7 / 14 / 20 |
-| `max_deep_reads` | I | 2 | 10 |
-| `minimum_deep_read_papers` | I | 2 | 6 |
-| `minimum_core_study_deep_reads` | I | 0 | 6 |
-| `max_survey_deep_reads` | I | 2 | 2 |
-| `max_nonpaper_deep_reads` | I | 2 | 2 |
-| source role soft targets | I | 无 | survey 2 / primary 6 / benchmark 2 / reproduction 1 / project 2 |
-| `max_promotions` | I | 0 | 6 |
-| paper / project / web soft quota | I | 5 / 1 / 2 | 30 / 10 / 10 |
-| `max_search_rounds` | I | 1 | 3 |
-| `max_queries` | I | 3 | 12 |
-| network / skim / deep-read concurrency | I | 4 / 2 / 2 | 4 / 2 / 2 |
-| EvidenceCard per source: PDF / repository / Web | I | 8 / 6 / 4 | 8 / 6 / 4 |
-| EvidenceExtraction schema repair attempts | I | 1 | 1 |
+| 参数 | 类别 | smoke | standard | literature50 |
+|---|---|---:|---:|---:|
+| `max_sources` | I | 8 | 50 | 110 |
+| `max_skims` | I | 4 | 20；三轮 7 / 14 / 20 | 60；四轮 15 / 30 / 45 / 60 |
+| `minimum_paper_skims` | I | 0 | 0 | 50 |
+| `max_deep_reads` | I | 2 | 10 | 15 |
+| `minimum_deep_read_papers` | I | 2 | 6 | 13 |
+| `minimum_core_study_deep_reads` | I | 0 | 6 | 12 |
+| `max_survey_deep_reads` | I | 2 | 2 | 2 |
+| `max_nonpaper_deep_reads` | I | 2 | 2 | 2 |
+| source role soft targets | I | 无 | survey 2 / primary 6 / benchmark 2 / reproduction 1 / project 2 | survey 4 / primary 28 / benchmark 8 / reproduction 5 / project 3 |
+| `max_promotions` | I | 0 | 6 | 6 |
+| paper / project / web soft quota | I | 5 / 1 / 2 | 30 / 10 / 10 | 100 / 5 / 5 |
+| `max_search_rounds` | I | 1 | 3 | 4 |
+| `max_queries` | I | 3 | 12 | 24 |
+| `minimum_evidenced_claims` | I | 1 | 1 | 8 |
+| `target_core_findings` | I | 1 | 6 | 8 |
+| network / skim / deep-read concurrency | I | 4 / 2 / 2 | 4 / 2 / 2 | 4 / 2 / 2 |
+| EvidenceCard per source: PDF / repository / Web | I | 8 / 6 / 4 | 8 / 6 / 4 | 8 / 6 / 4 |
+| EvidenceExtraction schema repair attempts | I | 1 | 1 | 1 |
 
 Evidence extraction limits each source to a compact set of high-value cards. A schema-invalid
 model response receives one bounded repair pass that may remove invalid or incomplete entries
@@ -166,6 +169,10 @@ Review readiness 是计算结果，不可通过 YAML 直接填写：
 | `citation_ready_cards` | C | 合法且有 locator/hash 的 EvidenceCard 数 |
 | `evidenced_claims` | C | 至少关联一个支持或反对卡片的 UnderstandingClaim 数 |
 | `independent_sources` | C | Evidence Pool 中唯一 source ID 数 |
+| `paper_skims` | C | 已完成 SourceSkim 且规范化来源类型为 paper 的唯一来源数 |
+| `minimum_paper_skims` | I/C | 当前 profile 的论文广度下限；literature50 为 50 |
+| `deep_read_papers` | C | 已完成正文材料获取与 EvidenceCard 抽取的 paper 来源数 |
+| `minimum_deep_read_papers` | I/C | 当前 profile 的论文深读下限；literature50 为 13 |
 | `unresolved_blocking_ids` | C | 仍为 open 且 blocking 的 uncertainty |
 | `nonconsensus_review_complete` | C | 每个范围内候选假设的稳定 `uncertainty_id` 都已有 Evidence Pool 阶段 Assessment；Skim-only assessment 不计入 |
 | `saturated` | C | 连续两轮无新路线、卡片、独立来源、covered facet、blocking resolution、独立反证和确认关系 |

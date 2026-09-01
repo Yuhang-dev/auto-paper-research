@@ -50,6 +50,12 @@ ResearchGate、Academia.edu 等镜像用于导航，正式证据来自原始论�
 关系候选，只有精确 DOI/arXiv/repository/URL 身份会自动合并。
 使用说明见 `docs/REVIEW_FIRST_HARNESS.md`。
 
+面向正式大规模综述的 `literature50` profile 使用 `110 个候选来源 → 60 个 Skim
+（其中至少 50 篇去重论文）→ 15 个 Deep Read（其中至少 13 篇论文）→ 最多 6 篇晋升`。
+它保留 100 个论文发现名额和每轮 4 个 DeepXiv Query，为跨查询去重留出余量；报告会
+列出全部已完成 Skim 的论文，并以至少 8 个证据化 UnderstandingClaim 和 8 条核心
+结论为目标。结论仍由正文 EvidenceCard 支撑。
+
 Standard 的 12 个查询预算按三轮分配为 `4 → 4 → 4`；20 个 Skim 是跨轮累计
 预算，按三轮渐进分配为 `7 → 14 → 20`。
 Semantic Scholar 对每轮入选 Deep Read 论文执行一次批量元数据补全；连续 429 会在

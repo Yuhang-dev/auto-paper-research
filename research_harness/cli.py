@@ -218,7 +218,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     review_start.add_argument("--thread", required=True)
     review_start.add_argument("--run-id")
     review_start.add_argument(
-        "--profile", choices=("smoke", "standard"), default="standard"
+        "--profile",
+        choices=("smoke", "standard", "literature50"),
+        default="standard",
+        help=(
+            "smoke runs 8→4→2; standard runs 50→20→10; literature50 "
+            "requires at least 50 unique paper skims before readiness"
+        ),
     )
     review_start.add_argument("--allow-network", action="store_true")
     review_start.add_argument(
@@ -1228,8 +1234,20 @@ def _review_state_payload(
         ),
     }
     report_exists = store.report_path.is_file()
+    sources = store.sources()
+    skims = store.skims()
+    deep_read_ids = store.deep_read_completed()
+    source_types = {item.source_id: item.source_type for item in sources}
+    synthesis_draft = store.synthesis_draft()
+    report_conclusions = (
+        len(synthesis_draft.core_findings)
+        + len(synthesis_draft.task_and_performance)
+        + len(synthesis_draft.engineering_bottlenecks)
+        if synthesis_draft
+        else 0
+    )
     role_counts: Dict[str, int] = {}
-    for skim in store.skims():
+    for skim in skims:
         role_counts[skim.source_role] = role_counts.get(skim.source_role, 0) + 1
     coverage = store.coverage()
     gaps = tuple(item for item in store.gaps() if item.status == "open")
@@ -1260,10 +1278,21 @@ def _review_state_payload(
         "stop_reason": state.get("stop_reason", ""),
         "round_number": int(state.get("round_number") or 0),
         "funnel": {
-            "sources": len(store.sources()),
-            "skims": len(store.skims()),
-            "deep_reads": len(store.deep_read_completed()),
+            "sources": len(sources),
+            "paper_sources": sum(
+                item.source_type == "paper" for item in sources
+            ),
+            "skims": len(skims),
+            "paper_skims": sum(
+                source_types.get(item.source_id) == "paper" for item in skims
+            ),
+            "deep_reads": len(deep_read_ids),
+            "deep_read_papers": sum(
+                source_types.get(source_id) == "paper"
+                for source_id in deep_read_ids
+            ),
             "evidence_cards": len(store.cards()),
+            "report_conclusions": report_conclusions,
             "promotion_limit": store.config.max_promotions,
         },
         "readiness": readiness.model_dump(mode="json") if readiness else None,
@@ -1320,7 +1349,7 @@ def _run_review_start(
     bundle = ReviewModelBundle.from_env(
         settings,
         allow_single_model_fallback=bool(args.allow_single_model_fallback),
-        require_reasoning=not canary and args.profile == "standard",
+        require_reasoning=not canary and args.profile != "smoke",
     )
     run_id = args.run_id or _review_run_id("review-smoke" if canary else "review")
     thread_id = args.thread or f"review:{args.research_id}:{run_id}"

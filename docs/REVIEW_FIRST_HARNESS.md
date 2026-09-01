@@ -28,6 +28,7 @@ Skim 只用于筛选和导航，不能作为报告证据。
 |---|---:|---:|---:|---:|
 | `smoke` | 8 | 4 | 2 | 0 |
 | `standard` | 50 | 20 | 10 | 最多 6 |
+| `literature50` | 110 | 60，其中至少 50 篇论文 | 15，其中至少 13 篇论文 | 最多 6 |
 
 标准来源软配额为论文 30、GitHub/项目 10、一般 Web 10。论文发现由 DeepXiv
 承担；Semantic Scholar 不参与宽检索，也不增加来源数量。它只在漏斗已经选出
@@ -37,6 +38,11 @@ Deep Read 论文后，按 arXiv ID 或 DOI 为这些少量论文补充 citation 
 
 Standard 的 12 个 Query 按剩余轮次均匀保留预算，默认三轮各最多 4 个，避免前两轮
 耗尽 Query 额度而跳过最后一次 Gap 驱动补搜。
+
+`literature50` 用 100 / 5 / 5 的论文、项目、Web 发现软配额，并将 24 个 Query
+按四轮分配为 `6 → 6 → 6 → 6`。每轮确定性保留 4 个 DeepXiv 论文 Query，形成最多
+100 个去重论文候选，再完成至少 50 篇论文的标题/摘要级 Skim。最终结论只引用进入
+Deep Read 后生成的 EvidenceCard；报告附录列出完整的 50+ 论文 Skim 范围。
 
 来源软配额只服务于发现和 Skim 多样性，不再直接决定 Deep Read。Deep Read
 优先满足原始论文下限：Smoke 为 2，standard 为 6；剩余名额再按证据价值补充
@@ -51,6 +57,11 @@ survey 最多 2、非论文来源最多 2，并优先保证 6 个 primary/benchm
 Skim 上限是整个 run 的累计预算，不是每轮重新选择 20 个。三轮 Standard 默认依次
 开放到 `7 → 14 → 20`，从而为后续 gap-driven 来源保留阅读名额。旧 run 中已经超过
 20 的 Skim 会继续保留用于审计，但恢复时不再增加。
+
+`literature50` 的 60 个 Skim 采用软目标：survey 4、primary study 28、benchmark 8、
+reproduction 5、project 3，其余按综合得分补齐。确定性选择器优先达到 50 篇论文
+下限。15 个 Deep Read 优先包含 12 个 primary/benchmark/reproduction 研究，整体
+至少保留 13 篇论文。
 
 ## 3. Fast Research Loop
 
@@ -74,6 +85,10 @@ frame
 连续两轮都没有新方法路线、Citation-ready EvidenceCard、新独立来源、新 covered
 facet、被解决的 blocking uncertainty、独立反证或新确认关系时，判为基本饱和。
 达到预算但仍有缺口时仍生成报告，并把缺口列为 unresolved。
+
+Assessment 主调用遗漏某个稳定 `uncertainty_id` 时，运行时只针对缺失项执行一次
+Evidence Pool 重试。这个补全不重读 Skim、不重复处理已完成项；缺少跨论文可比证据
+的假设继续标记为 `insufficient-evidence`。
 
 并发边界：网络 4、Skim 2、深读/证据抽取 2；SQLite 和 artifact 写入保持串行。
 批次产物按稳定 source ID 排序。每个图节点形成 checkpoint，单个已经完成的 Skim、
@@ -224,6 +239,20 @@ python -B -m research_harness research review start `
   --thread "sparse-review-standard-v1" `
   --profile standard `
   --allow-network
+```
+
+至少 50 篇论文的正式综述：
+
+```powershell
+$runId = "literature50-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+
+python -B -m research_harness research review start `
+  long-context-sparse-models `
+  --run-id $runId `
+  --thread $runId `
+  --profile literature50 `
+  --allow-network `
+  --format json
 ```
 
 状态、恢复和重新综合：

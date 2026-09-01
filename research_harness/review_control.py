@@ -230,6 +230,75 @@ def _required_nonconsensus_uncertainty_ids(
     )
 
 
+def _paper_skim_count(store: ReviewArtifactStore) -> int:
+    source_types = {item.source_id: item.source_type for item in store.sources()}
+    return sum(
+        source_types.get(item.source_id) == "paper" for item in store.skims()
+    )
+
+
+def _deep_read_paper_count(store: ReviewArtifactStore) -> int:
+    source_types = {item.source_id: item.source_type for item in store.sources()}
+    return sum(
+        source_types.get(source_id) == "paper"
+        for source_id in store.deep_read_completed()
+    )
+
+
+def _missing_nonconsensus_assessment_ids(
+    scope: ReviewScope,
+    assessments: Sequence[NonConsensusAssessment],
+) -> tuple[str, ...]:
+    completed = {
+        item.uncertainty_id
+        for item in assessments
+        if item.basis == "evidence-pool" and item.uncertainty_id
+    }
+    return tuple(
+        item
+        for item in _required_nonconsensus_uncertainty_ids(scope)
+        if item not in completed
+    )
+
+
+def _complete_missing_nonconsensus_assessments(
+    *,
+    semantic_engine: ReviewSemanticEngine,
+    scope: ReviewScope,
+    cards: Sequence[EvidenceCard],
+    claims: Sequence[UnderstandingClaim],
+    uncertainties: Sequence[ResearchUncertainty],
+    assessments: Sequence[NonConsensusAssessment],
+) -> tuple[
+    tuple[UnderstandingClaim, ...],
+    tuple[ResearchUncertainty, ...],
+    tuple[NonConsensusAssessment, ...],
+    Optional[ReasoningUpdate],
+]:
+    missing = _missing_nonconsensus_assessment_ids(scope, assessments)
+    if not cards or not missing:
+        return tuple(claims), tuple(uncertainties), tuple(assessments), None
+    missing_set = set(missing)
+    retry_targets = tuple(
+        item for item in uncertainties if item.uncertainty_id in missing_set
+    )
+    retry_update = semantic_engine.reason(
+        scope=scope,
+        skims=(),
+        cards=cards,
+        claims=claims,
+        uncertainties=retry_targets,
+    )
+    merged = _merge_reasoning(
+        update=retry_update,
+        existing_claims=claims,
+        existing_uncertainties=uncertainties,
+        existing_assessments=assessments,
+        cards=cards,
+    )
+    return *merged, retry_update
+
+
 def _normalized_text(value: str) -> str:
     return " ".join(value.casefold().split())
 
@@ -1129,12 +1198,13 @@ def build_review_graph(
         claims = store.claims()
         uncertainties = store.uncertainties()
         assessments = store.assessments()
+        cards = store.cards()
         update: Optional[ReasoningUpdate] = None
         try:
             update = semantic_engine.reason(
                 scope=scope,
                 skims=skims,
-                cards=store.cards(),
+                cards=cards,
                 claims=claims,
                 uncertainties=uncertainties,
             )
@@ -1143,7 +1213,7 @@ def build_review_graph(
                 existing_claims=claims,
                 existing_uncertainties=uncertainties,
                 existing_assessments=assessments,
-                cards=store.cards(),
+                cards=cards,
             )
             store.write_claims(claims)
             store.write_uncertainties(uncertainties)
@@ -1155,6 +1225,57 @@ def build_review_graph(
                 recurrence_key="review-assessment:structured-output",
                 observed=f"{type(exc).__name__}: {exc}",
             )
+        missing_assessment_ids = _missing_nonconsensus_assessment_ids(
+            scope, assessments
+        )
+        if cards and missing_assessment_ids:
+            progress_sink.update(
+                stage="assessment",
+                detail=(
+                    "Completing "
+                    f"{len(missing_assessment_ids)} missing evidence-pool assessments"
+                ),
+            )
+            try:
+                claims, uncertainties, assessments, retry_update = (
+                    _complete_missing_nonconsensus_assessments(
+                        semantic_engine=semantic_engine,
+                        scope=scope,
+                        cards=cards,
+                        claims=claims,
+                        uncertainties=uncertainties,
+                        assessments=assessments,
+                    )
+                )
+                store.write_claims(claims)
+                store.write_uncertainties(uncertainties)
+                store.write_assessments(assessments)
+                remaining_assessment_ids = _missing_nonconsensus_assessment_ids(
+                    scope, assessments
+                )
+                if remaining_assessment_ids:
+                    _record_error(
+                        store,
+                        stage="assessment",
+                        recurrence_key="review-assessment:missing-after-retry",
+                        observed=(
+                            "Evidence-pool assessment retry omitted: "
+                            + ", ".join(remaining_assessment_ids)
+                        ),
+                    )
+                if update is None:
+                    update = retry_update
+                elif retry_update and retry_update.found_independent_counterevidence:
+                    update = update.model_copy(
+                        update={"found_independent_counterevidence": True}
+                    )
+            except Exception as exc:
+                _record_error(
+                    store,
+                    stage="assessment",
+                    recurrence_key="review-assessment:missing-assessment-retry",
+                    observed=f"{type(exc).__name__}: {exc}",
+                )
         uncertainties = _refresh_review_analysis(
             scope=scope,
             store=store,
@@ -1218,6 +1339,11 @@ def build_review_graph(
             required_nonconsensus_uncertainty_ids=(
                 _required_nonconsensus_uncertainty_ids(scope)
             ),
+            paper_skim_count=_paper_skim_count(store),
+            minimum_paper_skims=config.minimum_paper_skims,
+            deep_read_paper_count=_deep_read_paper_count(store),
+            minimum_deep_read_papers=config.minimum_deep_read_papers,
+            minimum_evidenced_claims=config.minimum_evidenced_claims,
         )
         store.write_readiness(readiness)
         round_number = int(state.get("round_number") or 0)
@@ -1287,6 +1413,11 @@ def build_review_graph(
             required_nonconsensus_uncertainty_ids=(
                 _required_nonconsensus_uncertainty_ids(scope)
             ),
+            paper_skim_count=_paper_skim_count(store),
+            minimum_paper_skims=config.minimum_paper_skims,
+            deep_read_paper_count=_deep_read_paper_count(store),
+            minimum_deep_read_papers=config.minimum_deep_read_papers,
+            minimum_evidenced_claims=config.minimum_evidenced_claims,
         )
         store.write_readiness(readiness)
         try:
@@ -1339,6 +1470,7 @@ def build_review_graph(
             config=config,
             draft=draft,
             sources=store.sources(),
+            skims=store.skims(),
             cards=store.cards(),
             uncertainties=store.uncertainties(),
             assessments=store.assessments(),
@@ -1481,7 +1613,7 @@ class ReviewController:
             bundle = ReviewModelBundle.from_env(
                 settings,
                 allow_single_model_fallback=config.allow_single_model_fallback,
-                require_reasoning=config.profile == "standard",
+                require_reasoning=config.profile != "smoke",
             )
             semantic_engine = LangChainReviewSemanticEngine(
                 bundle, settings.skills_root
@@ -1499,7 +1631,7 @@ class ReviewController:
             self.store.working_root,
             network_concurrency=config.network_concurrency,
         )
-        if providers is None and config.profile == "standard":
+        if providers is None and config.profile != "smoke":
             self.providers.require_standard_sources()
         self.persistence = HarnessPersistence(settings)
         self.progress = progress or NullProgress()
@@ -1637,6 +1769,51 @@ class ReviewController:
                 recurrence_key="review-assessment:manual-synthesis",
                 observed=f"{type(exc).__name__}: {exc}",
             )
+        missing_assessment_ids = _missing_nonconsensus_assessment_ids(
+            self.scope, assessments
+        )
+        if cards and missing_assessment_ids:
+            self.progress.update(
+                stage="assessment",
+                detail=(
+                    "Completing "
+                    f"{len(missing_assessment_ids)} missing evidence-pool assessments"
+                ),
+            )
+            try:
+                claims, uncertainties, assessments, _retry_update = (
+                    _complete_missing_nonconsensus_assessments(
+                        semantic_engine=self.semantic_engine,
+                        scope=self.scope,
+                        cards=cards,
+                        claims=claims,
+                        uncertainties=uncertainties,
+                        assessments=assessments,
+                    )
+                )
+                self.store.write_claims(claims)
+                self.store.write_uncertainties(uncertainties)
+                self.store.write_assessments(assessments)
+                remaining_assessment_ids = _missing_nonconsensus_assessment_ids(
+                    self.scope, assessments
+                )
+                if remaining_assessment_ids:
+                    _record_error(
+                        self.store,
+                        stage="assessment",
+                        recurrence_key="review-assessment:missing-after-retry",
+                        observed=(
+                            "Evidence-pool assessment retry omitted: "
+                            + ", ".join(remaining_assessment_ids)
+                        ),
+                    )
+            except Exception as exc:
+                _record_error(
+                    self.store,
+                    stage="assessment",
+                    recurrence_key="review-assessment:missing-assessment-retry",
+                    observed=f"{type(exc).__name__}: {exc}",
+                )
         uncertainties = _refresh_review_analysis(
             scope=self.scope,
             store=self.store,
@@ -1654,6 +1831,11 @@ class ReviewController:
             required_nonconsensus_uncertainty_ids=(
                 _required_nonconsensus_uncertainty_ids(self.scope)
             ),
+            paper_skim_count=_paper_skim_count(self.store),
+            minimum_paper_skims=self.config.minimum_paper_skims,
+            deep_read_paper_count=_deep_read_paper_count(self.store),
+            minimum_deep_read_papers=self.config.minimum_deep_read_papers,
+            minimum_evidenced_claims=self.config.minimum_evidenced_claims,
         )
         self.store.write_readiness(readiness)
         self.progress.update(
@@ -1711,6 +1893,7 @@ class ReviewController:
                 config=self.config,
                 draft=draft,
                 sources=self.store.sources(),
+                skims=self.store.skims(),
                 cards=self.store.cards(),
                 uncertainties=self.store.uncertainties(),
                 assessments=self.store.assessments(),

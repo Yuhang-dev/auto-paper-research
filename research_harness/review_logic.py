@@ -414,8 +414,15 @@ def select_for_skim(
             continue
         ranked.append((screening.ranking_score, source, source_id))
     ranked.sort(key=lambda item: (-item[0], source_identity(item[1]), item[2]))
-    if config.source_role_targets:
+    if config.source_role_targets or config.minimum_paper_skims:
         type_limits = _type_limits(selection_limit, config)
+        progressive_paper_target = min(
+            selection_limit,
+            math.ceil(
+                config.minimum_paper_skims * selection_limit / config.max_skims
+            ),
+        )
+        type_limits["paper"] = max(type_limits["paper"], progressive_paper_target)
         selected: list[tuple[float, SourceRecord, str]] = []
         selected_ids: set[str] = set()
         type_counts: dict[SourceType, int] = defaultdict(int)
@@ -449,6 +456,12 @@ def select_for_skim(
                     admitted += 1
                     if admitted >= progressive_target:
                         break
+        paper_count = sum(item[1].source_type == "paper" for item in selected)
+        for item in ranked:
+            if len(selected) >= selection_limit or paper_count >= progressive_paper_target:
+                break
+            if item[1].source_type == "paper" and admit(item):
+                paper_count += 1
         for item in ranked:
             if len(selected) >= selection_limit:
                 break
@@ -553,6 +566,16 @@ def select_for_deep_read(
                 break
             if item[1].source_type == "paper" and item[3] in CORE_STUDY_ROLES:
                 admit(item)
+        paper_target = min(
+            config.minimum_deep_read_papers,
+            config.max_deep_reads,
+        )
+        paper_count = sum(item[1].source_type == "paper" for item in selected)
+        for item in ranked:
+            if paper_count >= paper_target:
+                break
+            if item[1].source_type == "paper" and admit(item):
+                paper_count += 1
         for item in ranked:
             if len(selected) >= config.max_deep_reads:
                 break
@@ -1046,6 +1069,11 @@ def review_readiness(
     assessments: Sequence[NonConsensusAssessment],
     saturated: bool,
     required_nonconsensus_uncertainty_ids: Sequence[str] = (),
+    paper_skim_count: int = 0,
+    minimum_paper_skims: int = 0,
+    deep_read_paper_count: int = 0,
+    minimum_deep_read_papers: int = 0,
+    minimum_evidenced_claims: int = 1,
 ) -> ReviewReadiness:
     cards_by_facet: dict[str, set[str]] = defaultdict(set)
     for card in cards:
@@ -1107,13 +1135,27 @@ def review_readiness(
         reasons.append("non-consensus review is incomplete")
     if not saturated:
         reasons.append("search has not reached understanding-level saturation")
-    if evidenced_claims == 0:
-        reasons.append("no understanding claim has citation-ready evidence")
+    if paper_skim_count < minimum_paper_skims:
+        reasons.append(
+            f"paper skim coverage: {paper_skim_count} < {minimum_paper_skims}"
+        )
+    if deep_read_paper_count < minimum_deep_read_papers:
+        reasons.append(
+            "deep-read paper coverage: "
+            f"{deep_read_paper_count} < {minimum_deep_read_papers}"
+        )
+    if evidenced_claims < minimum_evidenced_claims:
+        reasons.append(
+            "evidenced understanding claims: "
+            f"{evidenced_claims} < {minimum_evidenced_claims}"
+        )
     ready = (
         not missing
         and not blocking
         and nonconsensus_complete
-        and evidenced_claims > 0
+        and paper_skim_count >= minimum_paper_skims
+        and deep_read_paper_count >= minimum_deep_read_papers
+        and evidenced_claims >= minimum_evidenced_claims
         and saturated
     )
     return ReviewReadiness(
@@ -1126,6 +1168,11 @@ def review_readiness(
         saturated=saturated,
         ready=ready,
         reasons=tuple(reasons),
+        paper_skims=paper_skim_count,
+        minimum_paper_skims=minimum_paper_skims,
+        deep_read_papers=deep_read_paper_count,
+        minimum_deep_read_papers=minimum_deep_read_papers,
+        minimum_evidenced_claims=minimum_evidenced_claims,
     )
 
 

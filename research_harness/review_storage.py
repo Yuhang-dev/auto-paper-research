@@ -289,6 +289,10 @@ class ReviewArtifactStore:
     def progress_path(self) -> Path:
         return self._internal("progress.json")
 
+    @property
+    def synthesis_path(self) -> Path:
+        return self._internal("synthesis-draft.json")
+
     def progress(self) -> Optional[dict[str, Any]]:
         return read_progress(self.progress_path)
 
@@ -425,7 +429,14 @@ class ReviewArtifactStore:
         return ReviewReadiness.model_validate(json.loads(path.read_text(encoding="utf-8-sig")))
 
     def write_synthesis_draft(self, draft: ReviewSynthesisDraft) -> None:
-        _atomic_json(self._internal("synthesis-draft.json"), draft)
+        _atomic_json(self.synthesis_path, draft)
+
+    def synthesis_draft(self) -> Optional[ReviewSynthesisDraft]:
+        if not self.synthesis_path.is_file():
+            return None
+        return ReviewSynthesisDraft.model_validate(
+            json.loads(self.synthesis_path.read_text(encoding="utf-8-sig"))
+        )
 
     def write_report(self, content: str) -> None:
         _atomic_text(self.report_path, content.rstrip() + "\n")

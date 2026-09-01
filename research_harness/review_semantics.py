@@ -380,6 +380,11 @@ class LangChainReviewSemanticEngine:
                 "enabled_providers": list(enabled_providers),
                 "constraints": {
                     "maximum_queries": round_query_limit,
+                    "minimum_primary_paper_queries": (
+                        min(4, round_query_limit)
+                        if config.profile == "literature50"
+                        else 1
+                    ),
                     "target_only_the_three_highest_priority_gaps": True,
                     "at_least_one_primary_paper_query": "deepxiv",
                     "project_gap_provider": "github",
@@ -535,6 +540,65 @@ class LangChainReviewSemanticEngine:
                 )
                 if replace_at is not None:
                     normalized[replace_at] = fallback
+        if config.profile == "literature50" and "deepxiv" in enabled_providers:
+            primary_target = min(4, round_query_limit)
+            while (
+                len(normalized) < round_query_limit
+                or sum(item.provider == "deepxiv" for item in normalized)
+                < primary_target
+            ):
+                primary_count = sum(
+                    item.provider == "deepxiv" for item in normalized
+                )
+                target = (
+                    prioritized_uncertainties[
+                        primary_count % len(prioritized_uncertainties)
+                    ]
+                    if prioritized_uncertainties
+                    else None
+                )
+                facet_options = scope.required_facets or ("primary-study",)
+                facet = facet_options[
+                    (round_number + primary_count - 1) % len(facet_options)
+                ]
+                search_angles = (
+                    "method architecture",
+                    "benchmark evaluation",
+                    "systems implementation",
+                    "limitations reproduction",
+                )
+                search_angle = search_angles[(round_number - 1) % len(search_angles)]
+                fallback = RetrievalQuery(
+                    id="pending",
+                    round=round_number,
+                    provider="deepxiv",
+                    text=(
+                        f"{scope.question} {facet} primary study "
+                        f"{search_angle} evidence"
+                    ),
+                    purpose=(
+                        "Build the fifty-paper breadth corpus with a distinct "
+                        "primary-study query tied to the current evidence gap."
+                    ),
+                    target_facets=(facet,),
+                    uncertainty_id=target.uncertainty_id if target else None,
+                )
+                if len(normalized) < round_query_limit:
+                    normalized.append(fallback)
+                    continue
+                provider_counts = Counter(item.provider for item in normalized)
+                replace_at = next(
+                    (
+                        index
+                        for index in range(len(normalized) - 1, -1, -1)
+                        if normalized[index].provider != "deepxiv"
+                        and provider_counts[normalized[index].provider] > 1
+                    ),
+                    None,
+                )
+                if replace_at is None:
+                    break
+                normalized[replace_at] = fallback
         if (
             scope.candidate_hypotheses
             and normalized
@@ -975,12 +1039,30 @@ class LangChainReviewSemanticEngine:
                     "allowed_evidence_card_ids": [item.card_id for item in cards],
                     "comparison_consensus_or_contradiction_requires_two_independent_sources": True,
                     "single_source_claim_kind": "single-source-observation",
+                    "target_distinct_core_findings": config.target_core_findings,
+                    "cover_performance_engineering_and_limitations": True,
+                    "do_not_invent_findings_to_meet_the_target": True,
                     "output_format": "structured-synthesis-draft",
                 },
             },
             repair_once=True,
         )
         normalized = _downgrade_unsupported_synthesis(draft, cards)
+        if len(normalized.core_findings) < config.target_core_findings:
+            normalized = normalized.model_copy(
+                update={
+                    "limitations": tuple(
+                        dict.fromkeys(
+                            (
+                                *normalized.limitations,
+                                "证据池形成了 "
+                                f"{len(normalized.core_findings)} 条核心结论；"
+                                f"本运行目标为 {config.target_core_findings} 条。",
+                            )
+                        )
+                    )
+                }
+            )
         validate_synthesis_references(
             normalized, {item.card_id: item for item in cards}
         )
@@ -1069,6 +1151,7 @@ def render_review_markdown(
     config: ReviewRunConfig,
     draft: ReviewSynthesisDraft,
     sources: Sequence[SourceRecord],
+    skims: Sequence[SourceSkim],
     cards: Sequence[EvidenceCard],
     uncertainties: Sequence[ResearchUncertainty],
     assessments: Sequence[NonConsensusAssessment],
@@ -1080,6 +1163,24 @@ def render_review_markdown(
     by_source = {item.source_id: item for item in sources}
     ordered_cards = sorted(cards, key=lambda item: item.card_id)
     card_numbers = {item.card_id: index for index, item in enumerate(ordered_cards, 1)}
+    paper_sources = sum(item.source_type == "paper" for item in sources)
+    evidence_paper_sources = len(
+        {
+            item.source_id
+            for item in cards
+            if by_source.get(item.source_id)
+            and by_source[item.source_id].source_type == "paper"
+        }
+    )
+    skims_by_source = {item.source_id: item for item in skims}
+    skimmed_papers = sorted(
+        (
+            item
+            for item in sources
+            if item.source_type == "paper" and item.source_id in skims_by_source
+        ),
+        key=lambda item: (-(item.year or 0), item.title.casefold(), item.source_id),
+    )
 
     def statement_lines(values: Sequence[SynthesisStatement]) -> list[str]:
         lines = []
@@ -1117,9 +1218,16 @@ def render_review_markdown(
         "",
         draft.scope_summary or scope.question,
         "",
-        f"- 候选来源：{len(sources)}",
+        f"- 候选来源：{len(sources)}（论文 {paper_sources}）",
+        f"- 已完成论文 Skim：{readiness.paper_skims} / 最低要求 {readiness.minimum_paper_skims}",
+        (
+            f"- 已完成论文 Deep Read：{readiness.deep_read_papers} / "
+            f"最低要求 {readiness.minimum_deep_read_papers}"
+        ),
+        f"- 进入证据池的论文：{evidence_paper_sources}",
         f"- 可引用 EvidenceCard：{len(cards)}",
         f"- 独立证据来源：{readiness.independent_sources}",
+        f"- 核心结论：{len(draft.core_findings)} / 目标 {config.target_core_findings}",
         f"- 调研状态：{'具备综合条件' if readiness.ready else '达到预算后有界综合'}",
         f"- 精简 trajectory：`{trajectory_path}`",
         "",
@@ -1198,6 +1306,20 @@ def render_review_markdown(
             rendered_readiness_reasons.append(
                 "仍有阻塞问题：" + reason.removeprefix("open blocking uncertainties: ")
             )
+        elif reason.startswith("paper skim coverage: "):
+            rendered_readiness_reasons.append(
+                "论文广度不足：" + reason.removeprefix("paper skim coverage: ")
+            )
+        elif reason.startswith("deep-read paper coverage: "):
+            rendered_readiness_reasons.append(
+                "论文深读不足："
+                + reason.removeprefix("deep-read paper coverage: ")
+            )
+        elif reason.startswith("evidenced understanding claims: "):
+            rendered_readiness_reasons.append(
+                "证据化理解结论不足："
+                + reason.removeprefix("evidenced understanding claims: ")
+            )
         else:
             rendered_readiness_reasons.append(
                 readiness_reason_labels.get(reason, reason)
@@ -1224,6 +1346,25 @@ def render_review_markdown(
                 f"SHA-256：`{card.source_sha256}`；定位：{locator}；卡片：`{card.card_id}`。",
             ]
         )
+    lines.extend(
+        [
+            "",
+            "## 11. 已完成 Skim 的论文范围",
+            "",
+            "以下论文用于领域覆盖、路线导航和深读选择；正式结论以 EvidenceCard 索引为准。",
+            "",
+        ]
+    )
+    if skimmed_papers:
+        for index, source in enumerate(skimmed_papers, start=1):
+            skim = skims_by_source[source.source_id]
+            year = source.year or "年份未知"
+            lines.append(
+                f"{index}. [{source.title}]({source.canonical_url})"
+                f"（{year}；{skim.source_role}；{skim.label}）"
+            )
+    else:
+        lines.append("- 当前运行没有论文 Skim。")
     return "\n".join(lines).rstrip() + "\n"
 
 

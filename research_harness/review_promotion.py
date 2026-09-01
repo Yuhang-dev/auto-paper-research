@@ -372,7 +372,7 @@ class ReviewPromoter:
         bundle = ReviewModelBundle.from_env(
             self.settings,
             allow_single_model_fallback=self.store.config.allow_single_model_fallback,
-            require_reasoning=self.store.config.profile == "standard",
+            require_reasoning=self.store.config.profile != "smoke",
         )
         if (
             self.store.config.model_fingerprint

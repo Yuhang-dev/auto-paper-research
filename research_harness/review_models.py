@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .text_normalization import normalize_data
 
 
-ReviewProfile = Literal["smoke", "standard"]
+ReviewProfile = Literal["smoke", "standard", "literature50"]
 SourceType = Literal["paper", "project", "web"]
 SourceRole = Literal[
     "survey",
@@ -91,6 +91,7 @@ class ReviewRunConfig(ReviewModel):
     candidate_hypotheses: Tuple[str, ...] = ()
     max_sources: int = Field(ge=1, le=500)
     max_skims: int = Field(ge=1, le=200)
+    minimum_paper_skims: int = Field(default=0, ge=0, le=200)
     max_deep_reads: int = Field(ge=1, le=100)
     minimum_deep_read_papers: int = Field(default=2, ge=0, le=100)
     minimum_core_study_deep_reads: int = Field(default=0, ge=0, le=100)
@@ -103,6 +104,8 @@ class ReviewRunConfig(ReviewModel):
     web_source_quota: int = Field(ge=0)
     max_search_rounds: int = Field(default=3, ge=1, le=10)
     max_queries: int = Field(default=12, ge=1, le=100)
+    minimum_evidenced_claims: int = Field(default=1, ge=1, le=100)
+    target_core_findings: int = Field(default=1, ge=1, le=50)
     network_concurrency: int = Field(default=4, ge=1, le=32)
     skim_concurrency: int = Field(default=2, ge=1, le=16)
     deep_read_concurrency: int = Field(default=2, ge=1, le=16)
@@ -127,6 +130,8 @@ class ReviewRunConfig(ReviewModel):
             raise ValueError("max_skims cannot exceed max_sources")
         if self.max_deep_reads > self.max_skims:
             raise ValueError("max_deep_reads cannot exceed max_skims")
+        if self.minimum_paper_skims > self.max_skims:
+            raise ValueError("minimum_paper_skims cannot exceed max_skims")
         if self.minimum_deep_read_papers > self.max_deep_reads:
             raise ValueError(
                 "minimum_deep_read_papers cannot exceed max_deep_reads"
@@ -166,6 +171,10 @@ class ReviewRunConfig(ReviewModel):
         )
         if quota_total != self.max_sources:
             raise ValueError("source quotas must sum to max_sources")
+        if self.minimum_paper_skims > self.paper_source_quota:
+            raise ValueError(
+                "minimum_paper_skims cannot exceed paper_source_quota"
+            )
         if len(set(self.required_facets)) != len(self.required_facets):
             raise ValueError("required_facets cannot contain duplicates")
         for role in ("fast", "reasoning"):
@@ -207,6 +216,7 @@ class ReviewRunConfig(ReviewModel):
             budgets = {
                 "max_sources": 8,
                 "max_skims": 4,
+                "minimum_paper_skims": 0,
                 "max_deep_reads": 2,
                 "minimum_deep_read_papers": 2,
                 "minimum_core_study_deep_reads": 0,
@@ -219,11 +229,14 @@ class ReviewRunConfig(ReviewModel):
                 "web_source_quota": 2,
                 "max_search_rounds": 1,
                 "max_queries": 3,
+                "minimum_evidenced_claims": 1,
+                "target_core_findings": 1,
             }
-        else:
+        elif profile == "standard":
             budgets = {
                 "max_sources": 50,
                 "max_skims": 20,
+                "minimum_paper_skims": 0,
                 "max_deep_reads": 10,
                 "minimum_deep_read_papers": 6,
                 "minimum_core_study_deep_reads": 6,
@@ -242,6 +255,34 @@ class ReviewRunConfig(ReviewModel):
                 "web_source_quota": 10,
                 "max_search_rounds": 3,
                 "max_queries": 12,
+                "minimum_evidenced_claims": 1,
+                "target_core_findings": 6,
+            }
+        else:
+            budgets = {
+                "max_sources": 110,
+                "max_skims": 60,
+                "minimum_paper_skims": 50,
+                "max_deep_reads": 15,
+                "minimum_deep_read_papers": 13,
+                "minimum_core_study_deep_reads": 12,
+                "max_survey_deep_reads": 2,
+                "max_nonpaper_deep_reads": 2,
+                "source_role_targets": {
+                    "survey": 4,
+                    "primary-study": 28,
+                    "benchmark": 8,
+                    "reproduction": 5,
+                    "project": 3,
+                },
+                "max_promotions": 6,
+                "paper_source_quota": 100,
+                "project_source_quota": 5,
+                "web_source_quota": 5,
+                "max_search_rounds": 4,
+                "max_queries": 24,
+                "minimum_evidenced_claims": 8,
+                "target_core_findings": 8,
             }
         return cls(
             research_id=research_id,
@@ -635,6 +676,11 @@ class ReviewReadiness(ReviewModel):
     saturated: bool
     ready: bool
     reasons: Tuple[str, ...] = ()
+    paper_skims: int = Field(default=0, ge=0)
+    minimum_paper_skims: int = Field(default=0, ge=0)
+    deep_read_papers: int = Field(default=0, ge=0)
+    minimum_deep_read_papers: int = Field(default=0, ge=0)
+    minimum_evidenced_claims: int = Field(default=1, ge=1)
 
 
 class SynthesisStatement(ReviewModel):

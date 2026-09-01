@@ -35,6 +35,10 @@ independent evidence, and interpretation visibly separate.
   The result may be `supported-consensus`, `contested`, or
   `insufficient-evidence`; completing the checklist does not require finding a
   disagreement.
+- When the runtime supplies a target number of core findings, produce distinct
+  conclusions across technical routes, task quality, engineering performance,
+  failure boundaries, and open-source maturity. Use fewer findings when the
+  Evidence Pool cannot support the target and state that shortfall explicitly.
 - Reference exact EvidenceCard IDs. The runtime derives independent source IDs
   from those cards and deterministically downgrades unsupported comparisons.
 - Keep unresolved blocking questions explicit even when the search budget is

@@ -21,6 +21,7 @@ from research_harness.evidence_verification import (
 from research_harness.model_client import ReviewModelBundle
 from research_harness.review_control import (
     ReviewController,
+    _complete_missing_nonconsensus_assessments,
     _initial_uncertainties,
     _merge_reasoning,
     _refresh_review_analysis,
@@ -160,6 +161,27 @@ def _paper_source(
             DiscoveryRecord(
                 query_id="R01Q01",
                 provider="deepxiv",
+                rank=index,
+                retrieved_at=NOW,
+            ),
+        ),
+    )
+
+
+def _project_source(index: int) -> SourceRecord:
+    repository = f"example/sparse-project-{index}"
+    return SourceRecord(
+        source_id=f"github:{repository}",
+        source_type="project",
+        provider="github",
+        title=f"Sparse project {index}",
+        canonical_url=f"https://github.com/{repository}",
+        repository=repository,
+        target_facets=FACETS,
+        discoveries=(
+            DiscoveryRecord(
+                query_id="R01Q02",
+                provider="github",
                 rank=index,
                 retrieved_at=NOW,
             ),
@@ -447,6 +469,25 @@ class ReviewLoopTests(unittest.TestCase):
             created_at=NOW,
         )
 
+    def _literature50_config(
+        self, run_id="literature50-run", thread_id="literature50-thread"
+    ):
+        return ReviewRunConfig.for_profile(
+            research_id=self.scope.research_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            profile="literature50",
+            question=self.scope.question,
+            title=self.scope.title,
+            required_facets=self.scope.required_facets,
+            candidate_hypotheses=self.scope.candidate_hypotheses,
+            allow_network=False,
+            allow_single_model_fallback=False,
+            canary=False,
+            stop_after="synthesis",
+            created_at=NOW,
+        )
+
     def _providers(self, config):
         store = ReviewArtifactStore(self.settings, config)
         return ReviewProviderRegistry(
@@ -460,6 +501,47 @@ class ReviewLoopTests(unittest.TestCase):
         skim = FakeReviewEngine().skim_source(source=_web_source(1), scope=self.scope)
         self.assertTrue(skim.provisional)
         self.assertFalse(skim.citation_eligible)
+
+    def test_literature50_profile_selects_at_least_fifty_unique_papers(self):
+        config = self._literature50_config()
+        sources = (
+            *(_paper_source(index) for index in range(1, 61)),
+            *(_project_source(index) for index in range(1, 6)),
+            *(_web_source(index) for index in range(1, 6)),
+        )
+        screenings = {
+            source.source_id: SourceScreening(
+                source_id=source.source_id,
+                source_role=(
+                    "project"
+                    if source.source_type == "project"
+                    else "primary-study"
+                    if source.source_type == "paper"
+                    else "background"
+                ),
+                label="core",
+                relevance_score=0.9,
+                evidence_potential=0.9,
+                engineering_value=0.8,
+                counterevidence_value=0.5,
+                reason="Eligible breadth-corpus fixture.",
+                target_facets=FACETS,
+            )
+            for source in sources
+        }
+
+        selected = select_for_skim(sources, screenings, config)
+        source_types = {item.source_id: item.source_type for item in sources}
+
+        self.assertEqual(60, len(selected))
+        self.assertGreaterEqual(
+            sum(source_types[source_id] == "paper" for source_id in selected),
+            50,
+        )
+        self.assertEqual(50, config.minimum_paper_skims)
+        self.assertEqual(8, config.minimum_evidenced_claims)
+        self.assertEqual(4, config.max_search_rounds)
+        self.assertEqual(24, config.max_queries)
 
     def test_evidence_extraction_repairs_invalid_structured_output_once(self):
         valid = EvidenceExtraction(
@@ -567,6 +649,39 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertEqual(("paper:study-a", "paper:study-b"), selected)
         self.assertNotIn("paper:survey", selected)
         self.assertNotIn("web:mirror", selected)
+
+    def test_literature50_deep_read_keeps_thirteen_papers(self):
+        config = self._literature50_config()
+        papers = tuple(_paper_source(index) for index in range(1, 15))
+        projects = tuple(_project_source(index) for index in range(1, 4))
+        sources = (*papers, *projects)
+        skims = {
+            source.source_id: SourceSkim(
+                source_id=source.source_id,
+                source_type=source.source_type,
+                source_role=(
+                    "primary-study" if source.source_type == "paper" else "project"
+                ),
+                label="core",
+                relevance_score=(
+                    0.99 if source.source_type == "project" else 0.9
+                ),
+                why_relevant="Eligible deep-read quota fixture.",
+                target_facets=FACETS,
+                select_for_deep_read=True,
+                basis="abstract" if source.source_type == "paper" else "source-excerpt",
+            )
+            for source in sources
+        }
+
+        selected = select_for_deep_read(sources, skims, config)
+        source_types = {item.source_id: item.source_type for item in sources}
+
+        self.assertEqual(15, len(selected))
+        self.assertGreaterEqual(
+            sum(source_types[source_id] == "paper" for source_id in selected),
+            13,
+        )
 
     def test_web_authority_and_skim_numeric_guards_are_deterministic(self):
         self.assertEqual(
@@ -1198,6 +1313,40 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertEqual([4, 4, 4], round_sizes)
         self.assertEqual(config.max_queries, len(prior_queries))
 
+    def test_literature50_query_round_reserves_four_primary_searches(self):
+        config = self._literature50_config()
+        draft = QueryPlan(
+            rationale="Start from broad Web candidates before normalization.",
+            queries=tuple(
+                RetrievalQuery(
+                    id=f"draft-{index}",
+                    round=1,
+                    provider="tavily",
+                    text=f"sparse attention Web lead {index}",
+                    purpose="Locate a candidate source for the breadth corpus.",
+                )
+                for index in range(1, 7)
+            ),
+        )
+        engine = object.__new__(LangChainReviewSemanticEngine)
+        engine.fast_model = ScriptedStructuredModel([draft])
+        engine.registry = SkillRegistry(self.settings.skills_root)
+
+        plan = engine.plan_queries(
+            scope=self.scope,
+            config=config,
+            round_number=1,
+            uncertainties=(),
+            prior_queries=(),
+            enabled_providers=("deepxiv", "github", "tavily"),
+        )
+        providers = [item.provider for item in plan.queries]
+
+        self.assertEqual(6, len(providers))
+        self.assertEqual(4, providers.count("deepxiv"))
+        self.assertEqual(1, providers.count("github"))
+        self.assertEqual(1, providers.count("tavily"))
+
     def test_fuzzy_same_work_remains_a_candidate(self):
         left = _paper_source(
             1,
@@ -1491,6 +1640,55 @@ class ReviewLoopTests(unittest.TestCase):
         self.assertFalse(skim_readiness.nonconsensus_review_complete)
         self.assertTrue(evidence_readiness.nonconsensus_review_complete)
 
+    def test_readiness_enforces_fifty_paper_skims_and_evidenced_claims(self):
+        card = EvidenceCard(
+            card_id="card:breadth",
+            source_id="paper:breadth",
+            source_url="https://example.org/paper-breadth",
+            source_version="v1",
+            source_sha256="a" * 64,
+            statement="A located paper supports the breadth fixture.",
+            attribution="author",
+            evidence_type="author-discussion",
+            status="located",
+            locator=EvidenceLocator(kind="pdf-page", value="2"),
+        )
+        claim = UnderstandingClaim(
+            claim_id="claim:breadth",
+            statement="The breadth fixture has citation-ready evidence.",
+            scope=("breadth",),
+            confidence=0.7,
+            supporting_card_ids=(card.card_id,),
+            status="supported",
+        )
+
+        short = review_readiness(
+            required_facets=(),
+            cards=(card,),
+            claims=(claim,),
+            uncertainties=(),
+            assessments=(),
+            saturated=True,
+            paper_skim_count=49,
+            minimum_paper_skims=50,
+            minimum_evidenced_claims=1,
+        )
+        complete = review_readiness(
+            required_facets=(),
+            cards=(card,),
+            claims=(claim,),
+            uncertainties=(),
+            assessments=(),
+            saturated=True,
+            paper_skim_count=50,
+            minimum_paper_skims=50,
+            minimum_evidenced_claims=1,
+        )
+
+        self.assertFalse(short.ready)
+        self.assertIn("paper skim coverage: 49 < 50", short.reasons)
+        self.assertTrue(complete.ready)
+
     def test_required_nonconsensus_assessments_bind_by_uncertainty_id(self):
         uncertainty = ResearchUncertainty(
             uncertainty_id="uncertainty:kernel-speedup",
@@ -1535,6 +1733,42 @@ class ReviewLoopTests(unittest.TestCase):
             merged[0].assessment_id,
         )
         self.assertTrue(readiness.nonconsensus_review_complete)
+
+    def test_missing_nonconsensus_assessment_gets_one_evidence_pool_retry(self):
+        uncertainty = next(
+            item
+            for item in _initial_uncertainties(self.scope)
+            if item.question == self.scope.candidate_hypotheses[0]
+        )
+        card = EvidenceCard(
+            card_id="card:retry",
+            source_id="paper:retry",
+            source_url="https://example.org/retry",
+            source_version="v1",
+            source_sha256="a" * 64,
+            statement="A located result is available for hypothesis assessment.",
+            attribution="author",
+            evidence_type="author-discussion",
+            status="located",
+            locator=EvidenceLocator(kind="pdf-page", value="3"),
+        )
+        engine = FakeReviewEngine()
+
+        _claims, _uncertainties, assessments, retry_update = (
+            _complete_missing_nonconsensus_assessments(
+                semantic_engine=engine,
+                scope=self.scope,
+                cards=(card,),
+                claims=(),
+                uncertainties=(uncertainty,),
+                assessments=(),
+            )
+        )
+
+        self.assertIsNotNone(retry_update)
+        self.assertEqual(1, len(assessments))
+        self.assertEqual(uncertainty.uncertainty_id, assessments[0].uncertainty_id)
+        self.assertEqual("evidence-pool", assessments[0].basis)
 
     def test_primary_scope_question_stops_blocking_after_evidence_exists(self):
         config = self._config(run_id="scope-normalize", thread_id="scope-normalize")
