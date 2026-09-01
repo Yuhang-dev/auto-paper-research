@@ -58,7 +58,8 @@ def _add_format(parser: argparse.ArgumentParser) -> None:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="LangGraph orchestration for the LLM-Wiki research Harness."
+        description="LangGraph orchestration for the LLM-Wiki research Harness.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--db",

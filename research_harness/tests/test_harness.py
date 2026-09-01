@@ -17,7 +17,7 @@ from research_harness.config import (
     REPOSITORY_ROOT,
     resolve_database_path,
 )
-from research_harness.cli import main as cli_main
+from research_harness.cli import main as cli_main, parse_args
 from research_harness.env_file import load_local_env
 from research_harness.graph import ResearchHarness
 from research_harness.memory import list_notes, recall_notes, remember_note
@@ -86,6 +86,24 @@ class HarnessTestCase(unittest.TestCase):
 
 
 class ConfigurationAndPersistenceTests(HarnessTestCase):
+    def test_review_resume_parses_mode_without_matching_global_model_options(self) -> None:
+        args = parse_args(
+            [
+                "research",
+                "review",
+                "resume",
+                "long-context-sparse-models",
+                "--thread",
+                "resume-fixture",
+                "--mode",
+                "replan",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual("resume", args.review_command)
+        self.assertEqual("replan", args.mode)
+
     def test_local_env_file_loads_defaults_and_preserves_shell_values(self) -> None:
         env_file = Path(self.temporary.name) / ".env.local"
         env_file.write_text(
